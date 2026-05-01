@@ -1,4 +1,4 @@
-{{- if .Values.discoveryCronJob.enabled -}}
+{{- if .Values.snykScanCronJob.enabled -}}
 
 ---
 apiVersion: batch/v1
@@ -8,7 +8,7 @@ metadata:
   labels:
     {{- include "app.labels" . | nindent 4 }}
 spec:
-  schedule: "{{ .Values.discoveryCronJob.full_scan_schedule }}"
+  schedule: "{{ .Values.snykScanCronJob.full_scan_schedule }}"
   concurrencyPolicy: Forbid
   failedJobsHistoryLimit: 5
   startingDeadlineSeconds: 600
@@ -34,7 +34,7 @@ spec:
                 allowPrivilegeEscalation: false
                 seccompProfile:
                   type: RuntimeDefault
-      {{- include "discoveryCronJob.envs" .Values | nindent 14 }}
+      {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
           restartPolicy: Never
 
 ---
@@ -45,7 +45,7 @@ metadata:
   labels:
     {{- include "app.labels" . | nindent 4 }}
 spec:
-  schedule: "{{ .Values.discoveryCronJob.incremental_scan_schedule }}"
+  schedule: "{{ .Values.snykScanCronJob.incremental_scan_schedule }}"
   concurrencyPolicy: Forbid
   failedJobsHistoryLimit: 5
   startingDeadlineSeconds: 600
@@ -71,6 +71,6 @@ spec:
                 allowPrivilegeEscalation: false
                 seccompProfile:
                   type: RuntimeDefault
-      {{- include "discoveryCronJob.envs" .Values | nindent 14 }}
+      {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
           restartPolicy: Never
 {{- end }}

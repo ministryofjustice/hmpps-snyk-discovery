@@ -65,7 +65,7 @@ jobs:
     with:
       environment: 'dev'
       app_version: '${{ needs.build.outputs.app_version }}'
-      helm_additional_args: '--set "discoveryCronJob.env.SLACK_NOTIFY_CHANNEL=${{ vars.DEV_SLACK_NOTIFY_CHANNEL }}"  --set "discoveryCronJob.env.SLACK_ALERT_CHANNEL=${{ vars.DEV_SLACK_ALERT_CHANNEL }}"'
+      helm_additional_args: '--set "snykScanCronJob.env.SLACK_NOTIFY_CHANNEL=${{ vars.DEV_SLACK_NOTIFY_CHANNEL }}"  --set "snykScanCronJob.env.SLACK_ALERT_CHANNEL=${{ vars.DEV_SLACK_ALERT_CHANNEL }}"'
   deploy_prod:
     name: Deploy to production environment
     if: github.ref == 'refs/heads/main'
@@ -77,4 +77,4 @@ jobs:
     with:
       environment: 'prod'
       app_version: '${{ needs.build.outputs.app_version }}'
-      helm_additional_args: '--set "discoveryCronJob.env.SLACK_NOTIFY_CHANNEL=${{ vars.PROD_SLACK_NOTIFY_CHANNEL }}"  --set "discoveryCronJob.env.SLACK_ALERT_CHANNEL=${{ vars.PROD_SLACK_ALERT_CHANNEL }}"'
+      helm_additional_args: '--set "snykScanCronJob.env.SLACK_NOTIFY_CHANNEL=${{ vars.PROD_SLACK_NOTIFY_CHANNEL }}"  --set "snykScanCronJob.env.SLACK_ALERT_CHANNEL=${{ vars.PROD_SLACK_ALERT_CHANNEL }}"'

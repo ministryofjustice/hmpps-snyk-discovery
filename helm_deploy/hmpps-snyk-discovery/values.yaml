@@ -7,7 +7,7 @@ image:
 generic-prometheus-alerts:
   targetApplication: hmpps-snyk-discovery
 
-discoveryCronJob:
+snykScanCronJob:
   namespace_secrets:
     hmpps-snyk-discovery:
       SERVICE_CATALOGUE_API_ENDPOINT: "SERVICE_CATALOGUE_API_ENDPOINT"

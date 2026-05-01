@@ -1,8 +1,8 @@
-{{- define "discoveryCronJob.envs" -}}
-{{- if or .discoveryCronJob.namespace_secrets .discoveryCronJob.env -}}
+{{- define "snykScanCronJob.envs" -}}
+{{- if or .snykScanCronJob.namespace_secrets .snykScanCronJob.env -}}
 env:
-{{- if .discoveryCronJob.namespace_secrets -}}
-{{- range $secret, $envs := .discoveryCronJob.namespace_secrets }}
+{{- if .snykScanCronJob.namespace_secrets -}}
+{{- range $secret, $envs := .snykScanCronJob.namespace_secrets }}
   {{- range $key, $val := $envs }}
   - name: {{ $key }}
     valueFrom:
@@ -12,8 +12,8 @@ env:
         optional: true{{ end }}  {{- end }}
 {{- end }}
 {{- end }}
-{{- if .discoveryCronJob.env -}}
-{{- range $key, $val := .discoveryCronJob.env }}
+{{- if .snykScanCronJob.env -}}
+{{- range $key, $val := .snykScanCronJob.env }}
   - name: {{ $key }}
     value: {{ quote $val }}
 {{- end }}
