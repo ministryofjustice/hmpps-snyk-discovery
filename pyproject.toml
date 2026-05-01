@@ -10,4 +10,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-hmpps-sre-python-lib = { url = "https://github.com/ministryofjustice/hmpps-sre-python-lib/releases/download/v1.0.0/hmpps_sre_python_lib-1.0.0-py3-none-any.whl" }
+hmpps-sre-python-lib = { url = "https://github.com/ministryofjustice/hmpps-sre-python-lib/releases/download/v1.2.1/hmpps_sre_python_lib-1.2.1-py3-none-any.whl" }
