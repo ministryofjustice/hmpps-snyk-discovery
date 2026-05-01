@@ -14,7 +14,6 @@ from hmpps.services.job_log_handling import (
 )
 import processes.snyk_scans as snyk_scans
 
-log = logging.getLogger(__name__)
 snyk_binary = '/tmp/snyk'
 
 

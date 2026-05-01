@@ -5,7 +5,6 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "concurrent-log-handler>=0.9.28",
     "hmpps-sre-python-lib",
 ]
 
