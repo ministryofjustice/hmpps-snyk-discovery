@@ -6,7 +6,7 @@ generic-prometheus-alerts:
 
 discoveryCronJob:
   enabled: false
-  full_scan_schedule: "00 10 * * 1"
+  full_scan_schedule: "00 6 * * 1"
   incremental_scan_schedule: "00 8 * * 1-5"
   env:
     LOG_LEVEL: debug
