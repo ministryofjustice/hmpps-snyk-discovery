@@ -1,0 +1,76 @@
+{{- if .Values.discoveryCronJob.enabled -}}
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hmpps-snyk-discovery-full
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  schedule: "{{ .Values.discoveryCronJob.full_scan_schedule }}"
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 0 # Do not retry
+      ttlSecondsAfterFinished: 345600
+      template:
+        spec:
+          containers:
+            - name: hmpps-snyk-discovery
+              image: "{{ .Values.image.repository }}:{{ .Values.version }}"
+              command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-f"]
+              env:
+                - name: PATH
+                  value: "/home/appuser/.local:/usr/local/bin:$PATH"
+              securityContext:
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                seccompProfile:
+                  type: RuntimeDefault
+      {{- include "discoveryCronJob.envs" .Values | nindent 14 }}
+          restartPolicy: Never
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hmpps-snyk-discovery-incremental
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  schedule: "{{ .Values.discoveryCronJob.incremental_scan_schedule }}"
+  concurrencyPolicy: Forbid
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 0 # Do not retry
+      ttlSecondsAfterFinished: 345600
+      template:
+        spec:
+          containers:
+            - name: hmpps-snyk-discovery
+              image: "{{ .Values.image.repository }}:{{ .Values.version }}"
+              command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-i"]
+              env:
+                - name: PATH
+                  value: "/home/appuser/.local:/usr/local/bin:$PATH"
+              securityContext:
+                capabilities:
+                  drop:
+                  - ALL
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                seccompProfile:
+                  type: RuntimeDefault
+      {{- include "discoveryCronJob.envs" .Values | nindent 14 }}
+          restartPolicy: Never
+{{- end }}
