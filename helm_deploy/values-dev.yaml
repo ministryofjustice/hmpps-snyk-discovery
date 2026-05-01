@@ -5,7 +5,7 @@ generic-prometheus-alerts:
   alertSeverity: hmpps-sre-alerts-nonprod
 
 snykScanCronJob:
-  enabled: false
+  enabled: true
   full_scan_schedule: "00 6 * * 1"
   incremental_scan_schedule: "00 8 * * 1-5"
   env:
