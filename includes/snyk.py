@@ -61,7 +61,12 @@ def build_useful_description(vuln, fixed_version, cve_ids):
 
   # Remove common markdown boilerplate and keep readable text.
   cleaned = re.sub(r'#+\s*NVD Description\s*', '', raw_description, flags=re.IGNORECASE)
-  cleaned = re.sub(r'\*\*_Note:_\*\*\s*_.*?_', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+  cleaned = re.sub(
+    r'\*\*_Note:_\*\*\s*_.*?_',
+    '',
+    cleaned,
+    flags=re.IGNORECASE | re.DOTALL,
+  )
   cleaned = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', cleaned)
   cleaned = re.sub(r'[`*_#>]', '', cleaned)
   cleaned = re.sub(r'\s+', ' ', cleaned).strip()
@@ -94,9 +99,13 @@ def get_snyk_download_url():
   machine = platform.machine().lower()
 
   if system == 'linux':
-    binary_name = 'snyk-linux-arm64' if machine in ('aarch64', 'arm64') else 'snyk-linux'
+    binary_name = (
+      'snyk-linux-arm64' if machine in ('aarch64', 'arm64') else 'snyk-linux'
+    )
   elif system == 'darwin':
-    binary_name = 'snyk-macos-arm64' if machine in ('aarch64', 'arm64') else 'snyk-macos'
+    binary_name = (
+      'snyk-macos-arm64' if machine in ('aarch64', 'arm64') else 'snyk-macos'
+    )
   else:
     raise RuntimeError(f'Unsupported OS for Snyk install: {system}/{machine}')
 
@@ -141,7 +150,11 @@ def install():
 
 def get_platform_fallbacks():
   configured_platforms = os.getenv('SNYK_PLATFORM_FALLBACKS', 'linux/amd64,linux/arm64')
-  return [platform_name.strip() for platform_name in configured_platforms.split(',') if platform_name.strip()]
+  return [
+    platform_name.strip()
+    for platform_name in configured_platforms.split(',')
+    if platform_name.strip()
+  ]
 
 
 def run_snyk_subprocess(command):
@@ -189,7 +202,8 @@ def run_snyk_scan(image_name, retry_count=0):
       scan_output = parse_snyk_json_output(result.stdout)
       vulnerabilities = scan_output.get('vulnerabilities', [])
       log_debug(
-        f'Snyk scan result for {image_name} complete: {len(vulnerabilities)} vulnerabilities'
+        f'Snyk scan result for {image_name} complete: '
+        f'{len(vulnerabilities)} vulnerabilities'
       )
       return scan_output, image_name
 
