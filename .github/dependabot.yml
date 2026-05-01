@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"  
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"  # Location of workflow files
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "helm"
+    directory: "/helm_deploy/hmpps-snyk-discovery"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"

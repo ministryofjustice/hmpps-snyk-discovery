@@ -1,0 +1,16 @@
+---
+# Per environment values which override defaults in hmpps-snyk-discovery/values.yaml
+
+generic-prometheus-alerts:
+  alertSeverity: hmpps-sre-alerts-nonprod
+
+snykScanCronJob:
+  enabled: true
+  full_scan_schedule: "00 6 * * 1"
+  incremental_scan_schedule: "00 8 * * 1-5"
+  env:
+    LOG_LEVEL: debug
+
+namespace_secrets:
+  hmpps-snyk-discovery:
+    SC_FILTER: "SC_FILTER"

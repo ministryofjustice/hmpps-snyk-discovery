@@ -1,0 +1,16 @@
+---
+
+image:
+  repository: ghcr.io/ministryofjustice/hmpps-snyk-discovery
+  tag: xxx
+  
+generic-prometheus-alerts:
+  targetApplication: hmpps-snyk-discovery
+
+snykScanCronJob:
+  namespace_secrets:
+    hmpps-snyk-discovery:
+      SERVICE_CATALOGUE_API_ENDPOINT: "SERVICE_CATALOGUE_API_ENDPOINT"
+      SERVICE_CATALOGUE_API_KEY: "SERVICE_CATALOGUE_API_KEY"
+      SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN"
+      SNYK_TOKEN: "SNYK_TOKEN"

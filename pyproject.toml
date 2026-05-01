@@ -1,0 +1,12 @@
+[project]
+name = "hmpps-snyk-discovery"
+version = "0.1.1"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "hmpps-sre-python-lib",
+]
+
+[tool.uv.sources]
+hmpps-sre-python-lib = { url = "https://github.com/ministryofjustice/hmpps-sre-python-lib/releases/download/v1.2.1/hmpps_sre_python_lib-1.2.1-py3-none-any.whl" }

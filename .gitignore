@@ -1,0 +1,11 @@
+# dotenv environment variables file
+.env*
+.venv
+.python-version
+.idea
+.vscode
+**/Chart.lock
+__pycache__/
+**/.DS_Store
+helm_deploy/*/charts/*
+contrib
