@@ -311,7 +311,10 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   command = [snyk_binary, 'container', 'test', image_name, '--json']
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
-    result, output_path = run_snyk_subprocess_to_file(command, cache_dir=target_cache_dir)
+    result, output_path = run_snyk_subprocess_to_file(
+      command,
+      cache_dir=target_cache_dir,
+    )
     try:
       # Snyk exits with code 1 when vulnerabilities are found, which is expected.
       if result.returncode in (0, 1):
