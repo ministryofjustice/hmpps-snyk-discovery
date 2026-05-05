@@ -41,9 +41,7 @@ spec:
       {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
           volumes:
             - name: tmp-storage
-              configMap:
-                name: testing
-                defaultMode: 0755
+              emptyDir: {}
           restartPolicy: Never
 
 ---
