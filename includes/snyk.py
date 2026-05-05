@@ -90,9 +90,35 @@ def cleanup_snyk_cache_after_scan(image_name):
   if not get_env_bool('SNYK_CACHE_CLEANUP', default=True):
     return
 
+  binary_realpath = os.path.realpath(snyk_binary)
+  binary_parent_realpath = os.path.realpath(os.path.dirname(snyk_binary))
+
   for cache_path in get_snyk_cache_paths():
     try:
-      if os.path.isdir(cache_path):
+      if not os.path.isdir(cache_path):
+        continue
+
+      cache_realpath = os.path.realpath(cache_path)
+      if cache_realpath == binary_parent_realpath:
+        for entry_name in os.listdir(cache_path):
+          entry_path = os.path.join(cache_path, entry_name)
+          entry_realpath = os.path.realpath(entry_path)
+          if entry_realpath == binary_realpath:
+            continue
+
+          if os.path.isdir(entry_path) and not os.path.islink(entry_path):
+            shutil.rmtree(entry_path, ignore_errors=True)
+          else:
+            try:
+              os.remove(entry_path)
+            except FileNotFoundError:
+              pass
+
+        log_debug(
+          f'Cleaned Snyk cache directory after scanning {image_name} '
+          f'(preserved binary): {cache_path}'
+        )
+      else:
         shutil.rmtree(cache_path, ignore_errors=True)
         log_debug(f'Removed Snyk cache directory after scanning {image_name}: {cache_path}')
     except Exception as e:
