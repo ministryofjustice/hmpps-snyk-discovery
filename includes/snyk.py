@@ -319,6 +319,8 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
       # Snyk exits with code 1 when vulnerabilities are found, which is expected.
       if result.returncode in (0, 1):
         output_text = read_text_file(output_path)
+        if not output_text and result.stderr:
+          output_text = result.stderr
         if not output_text:
           return {'error': 'Snyk scan produced no JSON output'}, image_name
         scan_output = parse_snyk_json_output(output_text)
@@ -350,6 +352,8 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
         try:
           if platform_result.returncode in (0, 1):
             platform_output_text = read_text_file(platform_output_path)
+            if not platform_output_text and platform_result.stderr:
+              platform_output_text = platform_result.stderr
             if not platform_output_text:
               return {'error': 'Snyk scan produced no JSON output'}, image_name
             scan_output = parse_snyk_json_output(platform_output_text)
