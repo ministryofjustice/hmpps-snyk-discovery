@@ -236,33 +236,6 @@ def run_snyk_subprocess(command, cache_dir=None):
   )
 
 
-def run_snyk_subprocess_to_file(command, cache_dir=None):
-  target_cache_dir = cache_dir or get_thread_cache_dir()
-  os.makedirs(target_cache_dir, exist_ok=True)
-  process_env = os.environ.copy()
-  process_env['SNYK_CACHE_PATH'] = target_cache_dir
-
-  with tempfile.NamedTemporaryFile(
-    mode='w+',
-    encoding='utf-8',
-    dir=target_cache_dir,
-    prefix='snyk-output-',
-    suffix='.json',
-    delete=False,
-  ) as output_file:
-    output_path = output_file.name
-    result = subprocess.run(
-      command,
-      stdout=output_file,
-      stderr=subprocess.PIPE,
-      text=True,
-      check=False,
-      env=process_env,
-    )
-
-  return result, output_path
-
-
 def read_text_file(path, max_chars=None):
   try:
     with open(path, encoding='utf-8') as file:
@@ -308,19 +281,33 @@ def parse_snyk_json_output(output_text):
 
 def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   log_info(f'Running Snyk scan on {image_name}')
-  command = [snyk_binary, 'container', 'test', image_name, '--json']
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
-    result, output_path = run_snyk_subprocess_to_file(
-      command,
-      cache_dir=target_cache_dir,
-    )
+    with tempfile.NamedTemporaryFile(
+      mode='w+',
+      encoding='utf-8',
+      dir=target_cache_dir,
+      prefix='snyk-output-',
+      suffix='.json',
+      delete=False,
+    ) as output_file:
+      output_path = output_file.name
+
+    command = [
+      snyk_binary,
+      'container',
+      'test',
+      image_name,
+      '--json',
+      f'--json-file-output={output_path}',
+    ]
+    result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
     try:
       # Snyk exits with code 1 when vulnerabilities are found, which is expected.
       if result.returncode in (0, 1):
         output_text = read_text_file(output_path)
-        if not output_text and result.stderr:
-          output_text = result.stderr
+        if not output_text:
+          output_text = result.stdout or result.stderr
         if not output_text:
           return {'error': 'Snyk scan produced no JSON output'}, image_name
         scan_output = parse_snyk_json_output(output_text)
@@ -340,20 +327,38 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
 
     if 'image does not exist for the current platform' in error_output_lower:
       for platform_name in get_platform_fallbacks():
-        platform_command = command + [f'--platform={platform_name}']
+        with tempfile.NamedTemporaryFile(
+          mode='w+',
+          encoding='utf-8',
+          dir=target_cache_dir,
+          prefix='snyk-output-',
+          suffix='.json',
+          delete=False,
+        ) as platform_output_file:
+          platform_output_path = platform_output_file.name
+
+        platform_command = [
+          snyk_binary,
+          'container',
+          'test',
+          image_name,
+          '--json',
+          f'--json-file-output={platform_output_path}',
+          f'--platform={platform_name}',
+        ]
         log_info(
           f'Image not available on current platform. Retrying {image_name} '
           f'with {platform_name}...'
         )
-        platform_result, platform_output_path = run_snyk_subprocess_to_file(
+        platform_result = run_snyk_subprocess(
           platform_command,
           cache_dir=target_cache_dir,
         )
         try:
           if platform_result.returncode in (0, 1):
             platform_output_text = read_text_file(platform_output_path)
-            if not platform_output_text and platform_result.stderr:
-              platform_output_text = platform_result.stderr
+            if not platform_output_text:
+              platform_output_text = platform_result.stdout or platform_result.stderr
             if not platform_output_text:
               return {'error': 'Snyk scan produced no JSON output'}, image_name
             scan_output = parse_snyk_json_output(platform_output_text)
