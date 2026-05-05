@@ -6,8 +6,6 @@ import platform
 import shutil
 import re
 import threading
-import gc
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import sleep
 from hmpps.services.job_log_handling import (
@@ -99,11 +97,6 @@ def cleanup_snyk_cache_after_scan(image_name, cache_dir=None):
       )
   except Exception as e:
     log_debug(f'Snyk cache cleanup failed for {image_name} at {target_cache_dir}: {e}')
-
-
-def release_scan_memory():
-  if get_env_bool('SNYK_GC_AFTER_SCAN', default=True):
-    gc.collect()
 
 
 def build_useful_description(vuln, fixed_version, cve_ids):
@@ -236,25 +229,6 @@ def run_snyk_subprocess(command, cache_dir=None):
   )
 
 
-def read_text_file(path, max_chars=None):
-  try:
-    with open(path, encoding='utf-8') as file:
-      if max_chars:
-        return file.read(max_chars)
-      return file.read()
-  except Exception:
-    return ''
-
-
-def remove_file_safely(path):
-  try:
-    os.remove(path)
-  except FileNotFoundError:
-    pass
-  except Exception as e:
-    log_debug(f'Failed to remove temporary scan output {path}: {e}')
-
-
 def parse_snyk_json_output(output_text):
   if not output_text:
     raise ValueError('Snyk scan produced no JSON output')
@@ -281,102 +255,46 @@ def parse_snyk_json_output(output_text):
 
 def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   log_info(f'Running Snyk scan on {image_name}')
+  command = [snyk_binary, 'container', 'test', image_name, '--json']
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
-    with tempfile.NamedTemporaryFile(
-      mode='w+',
-      encoding='utf-8',
-      dir=target_cache_dir,
-      prefix='snyk-output-',
-      suffix='.json',
-      delete=False,
-    ) as output_file:
-      output_path = output_file.name
-
-    command = [
-      snyk_binary,
-      'container',
-      'test',
-      image_name,
-      '--json',
-      f'--json-file-output={output_path}',
-    ]
     result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
-    try:
-      # Snyk exits with code 1 when vulnerabilities are found, which is expected.
-      if result.returncode in (0, 1):
-        output_text = read_text_file(output_path)
-        if not output_text:
-          output_text = result.stdout or result.stderr
-        if not output_text:
-          return {'error': 'Snyk scan produced no JSON output'}, image_name
-        scan_output = parse_snyk_json_output(output_text)
-        vulnerabilities = scan_output.get('vulnerabilities', [])
-        log_debug(
-          f'Snyk scan result for {image_name} complete: '
-          f'{len(vulnerabilities)} vulnerabilities'
-        )
-        return scan_output, image_name
+     # Snyk exits with code 1 when vulnerabilities are found, which is expected.
+    if result.returncode in (0, 1):
+      if not result.stdout:
+        return {'error': 'Snyk scan produced no JSON output'}, image_name
+      scan_output = parse_snyk_json_output(result.stdout)
+      vulnerabilities = scan_output.get('vulnerabilities', [])
+      log_debug(
+        f'Snyk scan result for {image_name} complete: '
+        f'{len(vulnerabilities)} vulnerabilities'
+      )
+      return scan_output, image_name
 
-      error_output = result.stderr or read_text_file(output_path, max_chars=20000)
-    finally:
-      remove_file_safely(output_path)
-
-    error_output = error_output or 'Unknown Snyk error'
+    error_output = result.stderr or result.stdout or 'Unknown Snyk error'
     error_output_lower = error_output.lower()
 
     if 'image does not exist for the current platform' in error_output_lower:
       for platform_name in get_platform_fallbacks():
-        with tempfile.NamedTemporaryFile(
-          mode='w+',
-          encoding='utf-8',
-          dir=target_cache_dir,
-          prefix='snyk-output-',
-          suffix='.json',
-          delete=False,
-        ) as platform_output_file:
-          platform_output_path = platform_output_file.name
-
-        platform_command = [
-          snyk_binary,
-          'container',
-          'test',
-          image_name,
-          '--json',
-          f'--json-file-output={platform_output_path}',
-          f'--platform={platform_name}',
-        ]
+        platform_command = command + [f'--platform={platform_name}']
         log_info(
           f'Image not available on current platform. Retrying {image_name} '
           f'with {platform_name}...'
         )
-        platform_result = run_snyk_subprocess(
-          platform_command,
-          cache_dir=target_cache_dir,
-        )
-        try:
-          if platform_result.returncode in (0, 1):
-            platform_output_text = read_text_file(platform_output_path)
-            if not platform_output_text:
-              platform_output_text = platform_result.stdout or platform_result.stderr
-            if not platform_output_text:
-              return {'error': 'Snyk scan produced no JSON output'}, image_name
-            scan_output = parse_snyk_json_output(platform_output_text)
-            vulnerabilities = scan_output.get('vulnerabilities', [])
-            log_debug(
-              f'Snyk scan result for {image_name} on {platform_name} complete: '
-              f'{len(vulnerabilities)} vulnerabilities'
-            )
-            return scan_output, image_name
-
-          error_output = (
-            platform_result.stderr
-            or read_text_file(platform_output_path, max_chars=20000)
-            or error_output
+        platform_result = run_snyk_subprocess(platform_command, 
+                                              cache_dir=target_cache_dir)
+        if platform_result.returncode in (0, 1):
+          if not platform_result.stdout:
+            return {'error': 'Snyk scan produced no JSON output'}, image_name
+          scan_output = parse_snyk_json_output(platform_result.stdout)
+          vulnerabilities = scan_output.get('vulnerabilities', [])
+          log_debug(
+            f'Snyk scan result for {image_name} on {platform_name} complete: '
+            f'{len(vulnerabilities)} vulnerabilities'
           )
-        finally:
-          remove_file_safely(platform_output_path)
+          return scan_output, image_name
 
+        error_output = platform_result.stderr or platform_result.stdout or error_output
         error_output_lower = error_output.lower()
 
     if 'no space left on device' in error_output_lower:
@@ -445,7 +363,6 @@ def scan_component_image(services, component, retry_count):
   finally:
     cleanup_docker_after_scan(image_name)
     cleanup_snyk_cache_after_scan(image_name, cache_dir=thread_cache_dir)
-    release_scan_memory()
 
 
 def scan_result_summary(scan_result):
@@ -527,7 +444,7 @@ def scan_prod_image(sc, image_list):
   qty = len(valid_components)
   log_info(f'Starting scan for {qty} images...')
 
-  max_workers = max(1, min(get_env_int('SNYK_MAX_WORKERS', 2), qty or 1))
+  max_workers = max(1, min(get_env_int('SNYK_MAX_WORKERS', 4), qty or 1))
   log_info(f'Running Snyk scans with {max_workers} worker threads.')
 
   if max_workers == 1:
@@ -590,4 +507,4 @@ def scan_hmpps_base_container_images(sc):
     finally:
       cleanup_docker_after_scan(image_name)
       cleanup_snyk_cache_after_scan(image_name)
-      release_scan_memory()
+      
