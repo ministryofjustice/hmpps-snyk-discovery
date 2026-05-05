@@ -15,18 +15,17 @@ from hmpps.services.job_log_handling import (
 import processes.snyk_scans as snyk_scans
 
 
-def resolve_snyk_binary_path():
-  configured_path = os.getenv('SNYK_BINARY_PATH')
-  if configured_path:
-    return configured_path
+def resolve_snyk_cache_dir():
+  if configured_cache := os.getenv('SNYK_CACHE_DIR'):
+    return configured_cache
 
-  # Prefer app-owned cache in container, then OS temp dir as a fallback.
   if os.path.isdir('/app/snyk_cache'):
-    return '/app/snyk_cache/snyk'
-  return os.path.join(tempfile.gettempdir(), 'snyk')
+    return '/app/snyk_cache/.snyk-cache'
+  return os.path.join(tempfile.gettempdir(), '.snyk-cache')
 
 
-snyk_binary = resolve_snyk_binary_path()
+snyk_cache_dir = resolve_snyk_cache_dir()
+snyk_binary = os.getenv('SNYK_BINARY_PATH', os.path.join(snyk_cache_dir, 'snyk'))
 
 
 def get_env_bool(name, default=False):
@@ -65,6 +64,39 @@ def cleanup_docker_after_scan(image_name):
       )
   except Exception as e:
     log_debug(f'Docker cleanup failed for {image_name}: {e}')
+
+
+def get_snyk_cache_paths():
+  cache_paths = [snyk_cache_dir]
+
+  if configured_cache := os.getenv('SNYK_CACHE_DIR'):
+    cache_paths.append(configured_cache)
+
+  xdg_cache_home = os.getenv('XDG_CACHE_HOME')
+  if xdg_cache_home:
+    cache_paths.append(os.path.join(xdg_cache_home, 'snyk'))
+  else:
+    cache_paths.append(os.path.join(os.path.expanduser('~'), '.cache', 'snyk'))
+
+  tmp_dir = tempfile.gettempdir()
+  cache_paths.append(os.path.join(tmp_dir, 'snyk'))
+  cache_paths.append(os.path.join(tmp_dir, '.cache', 'snyk'))
+
+  # Keep order but remove duplicates.
+  return list(dict.fromkeys(cache_paths))
+
+
+def cleanup_snyk_cache_after_scan(image_name):
+  if not get_env_bool('SNYK_CACHE_CLEANUP', default=True):
+    return
+
+  for cache_path in get_snyk_cache_paths():
+    try:
+      if os.path.isdir(cache_path):
+        shutil.rmtree(cache_path, ignore_errors=True)
+        log_debug(f'Removed Snyk cache directory after scanning {image_name}: {cache_path}')
+    except Exception as e:
+      log_debug(f'Snyk cache cleanup failed for {image_name} at {cache_path}: {e}')
 
 
 def build_useful_description(vuln, fixed_version, cve_ids):
@@ -131,14 +163,19 @@ def get_snyk_download_url():
 
 def install():
   global snyk_binary
+  global snyk_cache_dir
 
   try:
+    snyk_cache_dir = resolve_snyk_cache_dir()
+    os.makedirs(snyk_cache_dir, exist_ok=True)
+    log_debug(f'Using Snyk cache directory: {snyk_cache_dir}')
+
     # Prefer a pre-installed CLI (for example Homebrew on macOS).
     if installed_snyk := shutil.which('snyk'):
       snyk_binary = installed_snyk
       log_info(f'Using pre-installed Snyk binary: {snyk_binary}')
     else:
-      snyk_binary = resolve_snyk_binary_path()
+      snyk_binary = os.getenv('SNYK_BINARY_PATH', os.path.join(snyk_cache_dir, 'snyk'))
       os.makedirs(os.path.dirname(snyk_binary), exist_ok=True)
       snyk_url = get_snyk_download_url()
       log_info(f'Downloading Snyk from {snyk_url}...')
@@ -177,11 +214,15 @@ def get_platform_fallbacks():
 
 
 def run_snyk_subprocess(command):
+  os.makedirs(snyk_cache_dir, exist_ok=True)
+  process_env = os.environ.copy()
+  process_env['SNYK_CACHE_PATH'] = snyk_cache_dir
   return subprocess.run(
     command,
     capture_output=True,
     text=True,
     check=False,
+    env=process_env,
   )
 
 
@@ -311,6 +352,7 @@ def scan_component_image(services, component, retry_count):
     )
   finally:
     cleanup_docker_after_scan(image_name)
+    cleanup_snyk_cache_after_scan(image_name)
 
 
 def scan_result_summary(scan_result):
@@ -432,3 +474,4 @@ def scan_hmpps_base_container_images(sc):
       )
     finally:
       cleanup_docker_after_scan(image_name)
+      cleanup_snyk_cache_after_scan(image_name)

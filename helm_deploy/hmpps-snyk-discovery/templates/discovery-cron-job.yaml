@@ -22,7 +22,7 @@ spec:
           containers:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
-              command: ["sleep", "36000"]
+              command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-f"]
               env:
                 - name: PATH
                   value: "/home/appuser/.local:/usr/local/bin:$PATH"
