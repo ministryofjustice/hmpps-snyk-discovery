@@ -5,7 +5,6 @@ import json
 import platform
 import shutil
 import re
-import tempfile
 from time import sleep
 from hmpps.services.job_log_handling import (
   log_debug,
@@ -15,17 +14,9 @@ from hmpps.services.job_log_handling import (
 import processes.snyk_scans as snyk_scans
 
 
-def resolve_snyk_cache_dir():
-  if configured_cache := os.getenv('SNYK_CACHE_DIR'):
-    return configured_cache
-
-  if os.path.isdir('/app/snyk_cache'):
-    return '/app/snyk_cache/.snyk-cache'
-  return os.path.join(tempfile.gettempdir(), '.snyk-cache')
-
-
-snyk_cache_dir = resolve_snyk_cache_dir()
-snyk_binary = os.getenv('SNYK_BINARY_PATH', os.path.join(snyk_cache_dir, 'snyk'))
+default_snyk_root = '/app/snyk_cache' if os.path.isdir('/app/snyk_cache') else '/tmp'
+snyk_cache_dir = os.getenv('SNYK_CACHE_DIR', os.path.join(default_snyk_root, '.snyk-cache'))
+snyk_binary = os.getenv('SNYK_BINARY_PATH', os.path.join(default_snyk_root, 'snyk-bin', 'snyk'))
 
 
 def get_env_bool(name, default=False):
@@ -66,65 +57,17 @@ def cleanup_docker_after_scan(image_name):
     log_debug(f'Docker cleanup failed for {image_name}: {e}')
 
 
-def get_snyk_cache_paths():
-  cache_paths = [snyk_cache_dir]
-
-  if configured_cache := os.getenv('SNYK_CACHE_DIR'):
-    cache_paths.append(configured_cache)
-
-  xdg_cache_home = os.getenv('XDG_CACHE_HOME')
-  if xdg_cache_home:
-    cache_paths.append(os.path.join(xdg_cache_home, 'snyk'))
-  else:
-    cache_paths.append(os.path.join(os.path.expanduser('~'), '.cache', 'snyk'))
-
-  tmp_dir = tempfile.gettempdir()
-  cache_paths.append(os.path.join(tmp_dir, 'snyk'))
-  cache_paths.append(os.path.join(tmp_dir, '.cache', 'snyk'))
-
-  # Keep order but remove duplicates.
-  return list(dict.fromkeys(cache_paths))
-
-
 def cleanup_snyk_cache_after_scan(image_name):
   if not get_env_bool('SNYK_CACHE_CLEANUP', default=True):
     return
 
-  binary_realpath = os.path.realpath(snyk_binary)
-  binary_parent_realpath = os.path.realpath(os.path.dirname(snyk_binary))
-
-  for cache_path in get_snyk_cache_paths():
-    try:
-      if not os.path.isdir(cache_path):
-        continue
-
-      cache_realpath = os.path.realpath(cache_path)
-      if cache_realpath == binary_parent_realpath:
-        for entry_name in os.listdir(cache_path):
-          entry_path = os.path.join(cache_path, entry_name)
-          entry_realpath = os.path.realpath(entry_path)
-          if entry_realpath == binary_realpath:
-            continue
-
-          if os.path.isdir(entry_path) and not os.path.islink(entry_path):
-            shutil.rmtree(entry_path, ignore_errors=True)
-          else:
-            try:
-              os.remove(entry_path)
-            except FileNotFoundError:
-              pass
-
-        log_debug(
-          f'Cleaned Snyk cache directory after scanning {image_name} '
-          f'(preserved binary): {cache_path}'
-        )
-      else:
-        shutil.rmtree(cache_path, ignore_errors=True)
-        log_debug(
-          f'Removed Snyk cache directory after scanning {image_name}: {cache_path}'
-        )
-    except Exception as e:
-      log_debug(f'Snyk cache cleanup failed for {image_name} at {cache_path}: {e}')
+  try:
+    if os.path.isdir(snyk_cache_dir):
+      shutil.rmtree(snyk_cache_dir, ignore_errors=True)
+      os.makedirs(snyk_cache_dir, exist_ok=True)
+      log_debug(f'Reset Snyk cache directory after scanning {image_name}: {snyk_cache_dir}')
+  except Exception as e:
+    log_debug(f'Snyk cache cleanup failed for {image_name} at {snyk_cache_dir}: {e}')
 
 
 def build_useful_description(vuln, fixed_version, cve_ids):
@@ -194,17 +137,19 @@ def install():
   global snyk_cache_dir
 
   try:
-    snyk_cache_dir = resolve_snyk_cache_dir()
+    # Re-read env so runtime overrides are respected.
+    snyk_cache_dir = os.getenv('SNYK_CACHE_DIR', snyk_cache_dir)
+    snyk_binary = os.getenv('SNYK_BINARY_PATH', snyk_binary)
     os.makedirs(snyk_cache_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(snyk_binary), exist_ok=True)
     log_debug(f'Using Snyk cache directory: {snyk_cache_dir}')
+    log_debug(f'Using Snyk binary path: {snyk_binary}')
 
     # Prefer a pre-installed CLI (for example Homebrew on macOS).
     if installed_snyk := shutil.which('snyk'):
       snyk_binary = installed_snyk
       log_info(f'Using pre-installed Snyk binary: {snyk_binary}')
     else:
-      snyk_binary = os.getenv('SNYK_BINARY_PATH', os.path.join(snyk_cache_dir, 'snyk'))
-      os.makedirs(os.path.dirname(snyk_binary), exist_ok=True)
       snyk_url = get_snyk_download_url()
       log_info(f'Downloading Snyk from {snyk_url}...')
       response = requests.get(snyk_url, stream=True, timeout=30)
