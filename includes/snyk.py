@@ -15,8 +15,14 @@ import processes.snyk_scans as snyk_scans
 
 
 default_snyk_root = '/app/snyk_cache' if os.path.isdir('/app/snyk_cache') else '/tmp'
-snyk_cache_dir = os.getenv('SNYK_CACHE_DIR', os.path.join(default_snyk_root, '.snyk-cache'))
-snyk_binary = os.getenv('SNYK_BINARY_PATH', os.path.join(default_snyk_root, 'snyk-bin', 'snyk'))
+snyk_cache_dir = os.getenv(
+  'SNYK_CACHE_DIR',
+  os.path.join(default_snyk_root, '.snyk-cache'),
+)
+snyk_binary = os.getenv(
+  'SNYK_BINARY_PATH',
+  os.path.join(default_snyk_root, 'snyk-bin', 'snyk'),
+)
 
 
 def get_env_bool(name, default=False):
@@ -65,7 +71,9 @@ def cleanup_snyk_cache_after_scan(image_name):
     if os.path.isdir(snyk_cache_dir):
       shutil.rmtree(snyk_cache_dir, ignore_errors=True)
       os.makedirs(snyk_cache_dir, exist_ok=True)
-      log_debug(f'Reset Snyk cache directory after scanning {image_name}: {snyk_cache_dir}')
+      log_debug(
+        f'Reset Snyk cache directory after scanning {image_name}: {snyk_cache_dir}'
+      )
   except Exception as e:
     log_debug(f'Snyk cache cleanup failed for {image_name} at {snyk_cache_dir}: {e}')
 
