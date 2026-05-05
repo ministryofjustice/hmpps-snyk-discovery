@@ -22,10 +22,14 @@ spec:
           containers:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
-              command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-f"]
+              command: ["sleep", "36000"]
               env:
                 - name: PATH
                   value: "/home/appuser/.local:/usr/local/bin:$PATH"
+              volumeMounts:
+                - name: tmp-storage
+                  mountPath: /tmp
+                  readOnly: false
               securityContext:
                 capabilities:
                   drop:
@@ -35,6 +39,11 @@ spec:
                 seccompProfile:
                   type: RuntimeDefault
       {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
+          volumes:
+            - name: tmp-storage
+              configMap:
+                name: testing
+                defaultMode: 0755
           restartPolicy: Never
 
 ---
