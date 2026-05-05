@@ -5,6 +5,7 @@ import json
 import platform
 import shutil
 import re
+import tempfile
 from time import sleep
 from hmpps.services.job_log_handling import (
   log_debug,
@@ -13,7 +14,19 @@ from hmpps.services.job_log_handling import (
 )
 import processes.snyk_scans as snyk_scans
 
-snyk_binary = '/tmp/snyk'
+
+def resolve_snyk_binary_path():
+  configured_path = os.getenv('SNYK_BINARY_PATH')
+  if configured_path:
+    return configured_path
+
+  # Prefer app-owned cache in container, then OS temp dir as a fallback.
+  if os.path.isdir('/app/snyk_cache'):
+    return '/app/snyk_cache/snyk'
+  return os.path.join(tempfile.gettempdir(), 'snyk')
+
+
+snyk_binary = resolve_snyk_binary_path()
 
 
 def get_env_bool(name, default=False):
@@ -119,6 +132,8 @@ def install():
       snyk_binary = installed_snyk
       log_info(f'Using pre-installed Snyk binary: {snyk_binary}')
     else:
+      snyk_binary = resolve_snyk_binary_path()
+      os.makedirs(os.path.dirname(snyk_binary), exist_ok=True)
       snyk_url = get_snyk_download_url()
       log_info(f'Downloading Snyk from {snyk_url}...')
       response = requests.get(snyk_url, stream=True, timeout=30)
