@@ -30,6 +30,8 @@ spec:
                 - name: tmp-storage
                   mountPath: /tmp
                   readOnly: false
+              resources:
+                {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
                 capabilities:
                   drop:
@@ -70,6 +72,8 @@ spec:
               env:
                 - name: PATH
                   value: "/home/appuser/.local:/usr/local/bin:$PATH"
+              resources:
+                {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
                 capabilities:
                   drop:

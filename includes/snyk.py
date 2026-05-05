@@ -6,6 +6,7 @@ import platform
 import shutil
 import re
 import threading
+import gc
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import sleep
 from hmpps.services.job_log_handling import (
@@ -97,6 +98,11 @@ def cleanup_snyk_cache_after_scan(image_name, cache_dir=None):
       )
   except Exception as e:
     log_debug(f'Snyk cache cleanup failed for {image_name} at {target_cache_dir}: {e}')
+
+
+def release_scan_memory():
+  if get_env_bool('SNYK_GC_AFTER_SCAN', default=True):
+    gc.collect()
 
 
 def build_useful_description(vuln, fixed_version, cve_ids):
@@ -363,6 +369,7 @@ def scan_component_image(services, component, retry_count):
   finally:
     cleanup_docker_after_scan(image_name)
     cleanup_snyk_cache_after_scan(image_name, cache_dir=thread_cache_dir)
+    release_scan_memory()
 
 
 def scan_result_summary(scan_result):
@@ -444,7 +451,7 @@ def scan_prod_image(sc, image_list):
   qty = len(valid_components)
   log_info(f'Starting scan for {qty} images...')
 
-  max_workers = max(1, min(get_env_int('SNYK_MAX_WORKERS', 4), qty or 1))
+  max_workers = max(1, min(get_env_int('SNYK_MAX_WORKERS', 2), qty or 1))
   log_info(f'Running Snyk scans with {max_workers} worker threads.')
 
   if max_workers == 1:
@@ -507,3 +514,4 @@ def scan_hmpps_base_container_images(sc):
     finally:
       cleanup_docker_after_scan(image_name)
       cleanup_snyk_cache_after_scan(image_name)
+      release_scan_memory()
