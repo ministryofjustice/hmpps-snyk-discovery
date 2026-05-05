@@ -37,7 +37,7 @@ def get_env_bool(name, default=False):
 
 
 def cleanup_docker_after_scan(image_name):
-  if not get_env_bool('SNYK_DOCKER_CLEANUP', default=False):
+  if not get_env_bool('SNYK_DOCKER_CLEANUP', default=True):
     return
 
   try:
@@ -110,9 +110,15 @@ def get_snyk_download_url():
   machine = platform.machine().lower()
 
   if system == 'linux':
-    binary_name = (
-      'snyk-linux-arm64' if machine in ('aarch64', 'arm64') else 'snyk-linux'
-    )
+    is_alpine = os.path.exists('/etc/alpine-release')
+    if is_alpine:
+      binary_name = (
+        'snyk-alpine-arm64' if machine in ('aarch64', 'arm64') else 'snyk-alpine'
+      )
+    else:
+      binary_name = (
+        'snyk-linux-arm64' if machine in ('aarch64', 'arm64') else 'snyk-linux'
+      )
   elif system == 'darwin':
     binary_name = (
       'snyk-macos-arm64' if machine in ('aarch64', 'arm64') else 'snyk-macos'
@@ -282,27 +288,29 @@ def scan_component_image(services, component, retry_count):
   component_build_image_tag = component['build_image_tag']
   image_name = f'{component["container_image_repo"]}:{component_build_image_tag}'
 
-  # Perform the Snyk scan
-  result_json, image_id = run_snyk_scan(image_name, retry_count)
+  try:
+    # Perform the Snyk scan
+    result_json, image_id = run_snyk_scan(image_name, retry_count)
 
-  # Summarize the scan results
-  if not result_json or (isinstance(result_json, dict) and result_json.get('error')):
-    scan_status = 'Failed'
-    scan_summary = {}
-  else:
-    scan_status = 'Succeeded'
-    scan_summary = scan_result_summary(result_json)
+    # Summarize the scan results
+    if not result_json or (isinstance(result_json, dict) and result_json.get('error')):
+      scan_status = 'Failed'
+      scan_summary = {}
+    else:
+      scan_status = 'Succeeded'
+      scan_summary = scan_result_summary(result_json)
 
-  # Update the scan results
-  snyk_scans.update(
-    services,
-    component_name,
-    component_build_image_tag,
-    image_id,
-    scan_summary,
-    scan_status,
-  )
-  cleanup_docker_after_scan(image_name)
+    # Update the scan results
+    snyk_scans.update(
+      services,
+      component_name,
+      component_build_image_tag,
+      image_id,
+      scan_summary,
+      scan_status,
+    )
+  finally:
+    cleanup_docker_after_scan(image_name)
 
 
 def scan_result_summary(scan_result):
@@ -402,23 +410,25 @@ def scan_hmpps_base_container_images(sc):
   for image in images:
     log_info(f'Started Snyk scan for {image}')
     image_name = f'ghcr.io/ministryofjustice/{image}:latest'
-    # Perform the Snyk scan
-    result_json, image_id = run_snyk_scan(image_name, 1)
+    try:
+      # Perform the Snyk scan
+      result_json, image_id = run_snyk_scan(image_name, 1)
 
-    # Summarize the scan results
-    scan_failed = not result_json or (
-      isinstance(result_json, dict) and result_json.get('error')
-    )
-    scan_summary = scan_result_summary(result_json) if not scan_failed else {}
-    scan_status = 'Failed' if scan_failed else 'Succeeded'
-    log_info(f'snyk scan summary for {image}: {scan_summary.get("summary", {})}')
-    # Update the scan results
-    snyk_scans.update(
-      sc,
-      f'hmpps-base-container-images:{image}',
-      'latest',
-      image_id,
-      scan_summary,
-      scan_status,
-    )
-    cleanup_docker_after_scan(image_name)
+      # Summarize the scan results
+      scan_failed = not result_json or (
+        isinstance(result_json, dict) and result_json.get('error')
+      )
+      scan_summary = scan_result_summary(result_json) if not scan_failed else {}
+      scan_status = 'Failed' if scan_failed else 'Succeeded'
+      log_info(f'snyk scan summary for {image}: {scan_summary.get("summary", {})}')
+      # Update the scan results
+      snyk_scans.update(
+        sc,
+        f'hmpps-base-container-images:{image}',
+        'latest',
+        image_id,
+        scan_summary,
+        scan_status,
+      )
+    finally:
+      cleanup_docker_after_scan(image_name)
