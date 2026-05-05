@@ -120,7 +120,9 @@ def cleanup_snyk_cache_after_scan(image_name):
         )
       else:
         shutil.rmtree(cache_path, ignore_errors=True)
-        log_debug(f'Removed Snyk cache directory after scanning {image_name}: {cache_path}')
+        log_debug(
+          f'Removed Snyk cache directory after scanning {image_name}: {cache_path}'
+        )
     except Exception as e:
       log_debug(f'Snyk cache cleanup failed for {image_name} at {cache_path}: {e}')
 
