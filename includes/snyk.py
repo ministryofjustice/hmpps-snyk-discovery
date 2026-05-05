@@ -5,6 +5,8 @@ import json
 import platform
 import shutil
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import sleep
 from hmpps.services.job_log_handling import (
   log_debug,
@@ -30,6 +32,23 @@ def get_env_bool(name, default=False):
   if value is None:
     return default
   return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def get_env_int(name, default):
+  value = os.getenv(name)
+  if value is None:
+    return default
+  try:
+    return int(value)
+  except ValueError:
+    log_error(f'Invalid integer value for {name}: {value}. Using default {default}.')
+    return default
+
+
+def get_thread_cache_dir():
+  if not get_env_bool('SNYK_THREAD_CACHE_ENABLED', default=True):
+    return snyk_cache_dir
+  return os.path.join(snyk_cache_dir, f'thread-{threading.get_ident()}')
 
 
 def cleanup_docker_after_scan(image_name):
@@ -63,19 +82,21 @@ def cleanup_docker_after_scan(image_name):
     log_debug(f'Docker cleanup failed for {image_name}: {e}')
 
 
-def cleanup_snyk_cache_after_scan(image_name):
+def cleanup_snyk_cache_after_scan(image_name, cache_dir=None):
   if not get_env_bool('SNYK_CACHE_CLEANUP', default=True):
     return
 
+  target_cache_dir = cache_dir or snyk_cache_dir
+
   try:
-    if os.path.isdir(snyk_cache_dir):
-      shutil.rmtree(snyk_cache_dir, ignore_errors=True)
-      os.makedirs(snyk_cache_dir, exist_ok=True)
+    if os.path.isdir(target_cache_dir):
+      shutil.rmtree(target_cache_dir, ignore_errors=True)
+      os.makedirs(target_cache_dir, exist_ok=True)
       log_debug(
-        f'Reset Snyk cache directory after scanning {image_name}: {snyk_cache_dir}'
+        f'Reset Snyk cache directory after scanning {image_name}: {target_cache_dir}'
       )
   except Exception as e:
-    log_debug(f'Snyk cache cleanup failed for {image_name} at {snyk_cache_dir}: {e}')
+    log_debug(f'Snyk cache cleanup failed for {image_name} at {target_cache_dir}: {e}')
 
 
 def build_useful_description(vuln, fixed_version, cve_ids):
@@ -194,10 +215,11 @@ def get_platform_fallbacks():
   ]
 
 
-def run_snyk_subprocess(command):
-  os.makedirs(snyk_cache_dir, exist_ok=True)
+def run_snyk_subprocess(command, cache_dir=None):
+  target_cache_dir = cache_dir or get_thread_cache_dir()
+  os.makedirs(target_cache_dir, exist_ok=True)
   process_env = os.environ.copy()
-  process_env['SNYK_CACHE_PATH'] = snyk_cache_dir
+  process_env['SNYK_CACHE_PATH'] = target_cache_dir
   return subprocess.run(
     command,
     capture_output=True,
@@ -231,11 +253,12 @@ def parse_snyk_json_output(output_text):
   raise ValueError('Unable to parse JSON from Snyk output')
 
 
-def run_snyk_scan(image_name, retry_count=0):
+def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   log_info(f'Running Snyk scan on {image_name}')
   command = [snyk_binary, 'container', 'test', image_name, '--json']
+  target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
-    result = run_snyk_subprocess(command)
+    result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
      # Snyk exits with code 1 when vulnerabilities are found, which is expected.
     if result.returncode in (0, 1):
       if not result.stdout:
@@ -258,7 +281,8 @@ def run_snyk_scan(image_name, retry_count=0):
           f'Image not available on current platform. Retrying {image_name} '
           f'with {platform_name}...'
         )
-        platform_result = run_snyk_subprocess(platform_command)
+        platform_result = run_snyk_subprocess(platform_command, 
+                                              cache_dir=target_cache_dir)
         if platform_result.returncode in (0, 1):
           if not platform_result.stdout:
             return {'error': 'Snyk scan produced no JSON output'}, image_name
@@ -297,7 +321,7 @@ def run_snyk_scan(image_name, retry_count=0):
         f'after {backoff_seconds}s...'
       )
       sleep(backoff_seconds)
-      return run_snyk_scan(image_name, retry_count)
+      return run_snyk_scan(image_name, retry_count, cache_dir=target_cache_dir)
     log_error(f'Snyk scan failed for {image_name}: {error_output}')
     return {'error': error_output}, image_name
   except Exception as e:
@@ -309,10 +333,15 @@ def scan_component_image(services, component, retry_count):
   component_name = component['component_name']
   component_build_image_tag = component['build_image_tag']
   image_name = f'{component["container_image_repo"]}:{component_build_image_tag}'
+  thread_cache_dir = get_thread_cache_dir()
 
   try:
     # Perform the Snyk scan
-    result_json, image_id = run_snyk_scan(image_name, retry_count)
+    result_json, image_id = run_snyk_scan(
+      image_name,
+      retry_count,
+      cache_dir=thread_cache_dir,
+    )
 
     # Summarize the scan results
     if not result_json or (isinstance(result_json, dict) and result_json.get('error')):
@@ -333,7 +362,7 @@ def scan_component_image(services, component, retry_count):
     )
   finally:
     cleanup_docker_after_scan(image_name)
-    cleanup_snyk_cache_after_scan(image_name)
+    cleanup_snyk_cache_after_scan(image_name, cache_dir=thread_cache_dir)
 
 
 def scan_result_summary(scan_result):
@@ -407,22 +436,44 @@ def scan_result_summary(scan_result):
 
 
 def scan_prod_image(sc, image_list):
-  qty = len(image_list)
+  valid_components = [
+    component
+    for component in image_list
+    if isinstance(component, dict) and component.get('build_image_tag')
+  ]
+  qty = len(valid_components)
   log_info(f'Starting scan for {qty} images...')
-  count = 1
 
-  for component in image_list:
-    if not isinstance(component, dict):
-      log_error(f'Invalid component format: {component}')
-      continue
+  max_workers = max(1, min(get_env_int('SNYK_MAX_WORKERS', 4), qty or 1))
+  log_info(f'Running Snyk scans with {max_workers} worker threads.')
 
-    if 'build_image_tag' in component and component['build_image_tag']:
+  if max_workers == 1:
+    for count, component in enumerate(valid_components, start=1):
       log_info(
         f'Started Snyk scan for {component["component_name"]} - {count}/{qty} '
         f'images ({int((count / qty) * 100)}%)'
       )
       scan_component_image(sc, component, 1)
-    count += 1
+  else:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+      future_to_component = {
+        executor.submit(scan_component_image, sc, component, 1): component
+        for component in valid_components
+      }
+      completed = 0
+      for future in as_completed(future_to_component):
+        completed += 1
+        component = future_to_component[future]
+        try:
+          future.result()
+        except Exception as e:
+          log_error(
+            f'Scan worker failed for {component.get("component_name", "unknown")}: {e}'
+          )
+        log_info(
+          f'Completed Snyk scans: {completed}/{qty} '
+          f'({int((completed / qty) * 100)}%)'
+        )
 
   log_info('Completed all Snyk scans.')
 
