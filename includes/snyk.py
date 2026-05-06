@@ -170,7 +170,9 @@ def install():
     snyk_cache_dir = os.getenv('SNYK_CACHE_DIR', snyk_cache_dir)
     snyk_binary = os.getenv('SNYK_BINARY_PATH', snyk_binary)
     os.makedirs(snyk_cache_dir, exist_ok=True)
-    os.makedirs(os.path.dirname(snyk_binary), exist_ok=True)
+    snyk_binary_dir = os.path.dirname(snyk_binary)
+    if snyk_binary_dir:
+      os.makedirs(snyk_binary_dir, exist_ok=True)
     log_debug(f'Using Snyk cache directory: {snyk_cache_dir}')
     log_debug(f'Using Snyk binary path: {snyk_binary}')
 
