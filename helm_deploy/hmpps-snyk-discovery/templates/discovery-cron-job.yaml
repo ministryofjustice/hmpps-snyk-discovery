@@ -23,9 +23,8 @@ spec:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
               command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-f"]
-              env:
-                - name: PATH
-                  value: "/home/appuser/.local:/usr/local/bin:$PATH"
+              resources:
+                {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
                 capabilities:
                   drop:
@@ -60,9 +59,8 @@ spec:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
               command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-i"]
-              env:
-                - name: PATH
-                  value: "/home/appuser/.local:/usr/local/bin:$PATH"
+              resources:
+                {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
                 capabilities:
                   drop:

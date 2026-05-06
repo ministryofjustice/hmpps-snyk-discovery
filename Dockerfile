@@ -1,10 +1,5 @@
 FROM ghcr.io/ministryofjustice/hmpps-python:python3.13-alpine AS base
 
-# Snyk CLI linux binaries require glibc compatibility on Alpine.
-USER root
-RUN apk add --no-cache libc6-compat
-USER appuser
-
 # initialise uv
 COPY pyproject.toml .
 RUN uv sync

@@ -8,6 +8,16 @@ generic-prometheus-alerts:
   targetApplication: hmpps-snyk-discovery
 
 snykScanCronJob:
+  env:
+    SNYK_MAX_WORKERS: "4"
+    PATH: "/home/appuser/.local:/usr/local/bin:$PATH"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
   namespace_secrets:
     hmpps-snyk-discovery:
       SERVICE_CATALOGUE_API_ENDPOINT: "SERVICE_CATALOGUE_API_ENDPOINT"
