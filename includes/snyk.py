@@ -283,8 +283,10 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
           f'Image not available on current platform. Retrying {image_name} '
           f'with {platform_name}...'
         )
-        platform_result = run_snyk_subprocess(platform_command, 
-                                              cache_dir=target_cache_dir)
+        platform_result = run_snyk_subprocess(
+          platform_command,
+          cache_dir=target_cache_dir,
+        )
         if platform_result.returncode in (0, 1):
           if not platform_result.stdout:
             return {'error': 'Snyk scan produced no JSON output'}, image_name
