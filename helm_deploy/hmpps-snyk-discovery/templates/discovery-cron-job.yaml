@@ -23,13 +23,6 @@ spec:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
               command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-f"]
-              env:
-                - name: PATH
-                  value: "/home/appuser/.local:/usr/local/bin:$PATH"
-              volumeMounts:
-                - name: tmp-storage
-                  mountPath: /tmp
-                  readOnly: false
               resources:
                 {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
@@ -41,9 +34,6 @@ spec:
                 seccompProfile:
                   type: RuntimeDefault
       {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
-          volumes:
-            - name: tmp-storage
-              emptyDir: {}
           restartPolicy: Never
 
 ---
@@ -69,9 +59,6 @@ spec:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
               command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-i"]
-              env:
-                - name: PATH
-                  value: "/home/appuser/.local:/usr/local/bin:$PATH"
               resources:
                 {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
