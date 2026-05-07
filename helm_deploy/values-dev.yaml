@@ -7,10 +7,7 @@ generic-prometheus-alerts:
 snykScanCronJob:
   enabled: true
   full_scan_schedule: "30 4 * * 1-5"
-  incremental_scan_schedule: "00 9 * * 1-5"
+  incremental_scan_schedule: "00 09 * * 1-5"
   env:
-    LOG_LEVEL: debug
+    LOG_LEVEL: info
 
-namespace_secrets:
-  hmpps-snyk-discovery:
-    SC_FILTER: "SC_FILTER"
