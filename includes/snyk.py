@@ -4,7 +4,6 @@ import os
 import json
 import platform
 import shutil
-import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import sleep
@@ -97,44 +96,6 @@ def cleanup_snyk_cache_after_scan(image_name, cache_dir=None):
       )
   except Exception as e:
     log_debug(f'Snyk cache cleanup failed for {image_name} at {target_cache_dir}: {e}')
-
-
-def build_useful_description(vuln, fixed_version, cve_ids):
-  raw_description = str(vuln.get('description', '') or '')
-
-  # Remove common markdown boilerplate and keep readable text.
-  cleaned = re.sub(r'#+\s*NVD Description\s*', '', raw_description, flags=re.IGNORECASE)
-  cleaned = re.sub(
-    r'\*\*_Note:_\*\*\s*_.*?_',
-    '',
-    cleaned,
-    flags=re.IGNORECASE | re.DOTALL,
-  )
-  cleaned = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', cleaned)
-  cleaned = re.sub(r'[`*_#>]', '', cleaned)
-  cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-
-  title = str(vuln.get('title', '') or '').strip()
-  package_name = str(vuln.get('packageName', 'N/A'))
-  installed_version = str(vuln.get('version', 'N/A'))
-
-  description_parts = []
-  if title:
-    description_parts.append(title)
-  if cleaned and cleaned.lower() != title.lower():
-    description_parts.append(cleaned)
-
-  description_parts.append(f'Affected package: {package_name}@{installed_version}.')
-  if fixed_version != 'N/A':
-    description_parts.append(f'Fixed in: {fixed_version}.')
-  else:
-    description_parts.append('No fixed version currently available.')
-
-  if cve_ids:
-    description_parts.append(f'CVE: {", ".join(cve_ids)}.')
-
-  description = ' '.join(part for part in description_parts if part)
-  return description[:500]
 
 
 def get_snyk_download_url():
@@ -370,70 +331,135 @@ def scan_component_image(services, component, retry_count):
 
 
 def scan_result_summary(scan_result):
+  severity_rank = {
+    'CRITICAL': 4,
+    'HIGH': 3,
+    'MEDIUM': 2,
+    'LOW': 1,
+    'UNKNOWN': 0,
+  }
+
   scan_summary = {
     'scan_result': {},
     'summary': {
       'snyk': {
-        'severity': {},
-        'fixable': {},
+        'severity': {
+          'CRITICAL': {
+            'total': 0,
+            'fixable': 0,
+            'unfixable': 0,
+          },
+          'HIGH': {
+            'total': 0,
+            'fixable': 0,
+            'unfixable': 0,
+          },
+          'MEDIUM': {
+            'total': 0,
+            'fixable': 0,
+            'unfixable': 0,
+          },
+          'LOW': {
+            'total': 0,
+            'fixable': 0,
+            'unfixable': 0,
+          },
+          'UNKNOWN': {
+            'total': 0,
+            'fixable': 0,
+            'unfixable': 0,
+          },
+        },
         'total': 0,
       },
     },
   }
+
+  aggregated_vulns = {}
+  severity_mismatch_logged = set()
+
+  def choose_earliest_iso(existing_value, new_value):
+    if not new_value:
+      return existing_value
+    if not existing_value:
+      return str(new_value)
+    existing = str(existing_value)
+    candidate = str(new_value)
+    return candidate if candidate < existing else existing
+
   vulnerabilities = scan_result.get('vulnerabilities', [])
   for vuln in vulnerabilities:
-    severity = str(vuln.get('severity', 'unknown')).upper()
+    severity = str(vuln.get('severity', 'UNKNOWN')).upper()
+    if severity not in severity_rank:
+      severity = 'UNKNOWN'
 
     fixed_versions = vuln.get('fixedIn', [])
+    normalized_fixed_in = []
     if isinstance(fixed_versions, list):
-      fixed_version = ', '.join(fixed_versions) if fixed_versions else 'N/A'
-    else:
-      fixed_version = str(fixed_versions) if fixed_versions else 'N/A'
+      normalized_fixed_in = [str(version) for version in fixed_versions if version]
+    elif fixed_versions:
+      normalized_fixed_in = [str(fixed_versions)]
 
-    vulnerability_id = vuln.get('id', 'N/A')
-    primary_url = f'https://security.snyk.io/vuln/{vulnerability_id}'
+    vulnerability_id = str(vuln.get('id', 'N/A'))
     cve_ids = vuln.get('identifiers', {}).get('CVE', [])
+    snyk_publication_date = vuln.get('publicationTime')
     if not isinstance(cve_ids, list):
       cve_ids = []
-    cve_disclosure_date = vuln.get('disclosureTime')
-    snyk_publication_date = vuln.get('publicationTime')
-    description = build_useful_description(vuln, fixed_version, cve_ids)
-    fixed_available = fixed_version != 'N/A'
-    fixable_bucket = 'fixable' if fixed_available else 'not_fixable'
+    cve_ids = sorted({str(cve_id) for cve_id in cve_ids if cve_id})
+    fixed_available = bool(normalized_fixed_in)
 
-    # Store Snyk-native vulnerability payload for SC and developer portal consumers.
-    normalized_fixed_in = fixed_versions if isinstance(fixed_versions, list) else []
-    if not normalized_fixed_in and fixed_version != 'N/A':
-      normalized_fixed_in = [fixed_version]
-
-    scan_summary['scan_result'].setdefault('snyk-vulns', []).append(
-      {
+    if vulnerability_id not in aggregated_vulns:
+      aggregated_vulns[vulnerability_id] = {
         'id': vulnerability_id,
-        'title': vuln.get('title', ''),
+        'title': str(vuln.get('title', '') or ''),
         'severity': severity,
-        'packageName': vuln.get('packageName', 'N/A'),
-        'packageManager': vuln.get('packageManager', 'unknown'),
-        'version': vuln.get('version', 'N/A'),
-        'fixedIn': normalized_fixed_in,
-        'description': description,
-        'exploitMaturity': vuln.get('exploitMaturity', 'unknown'),
-        'isUpgradable': bool(vuln.get('isUpgradable', False)),
-        'isPatchable': bool(vuln.get('isPatchable', False)),
-        'cvssScore': vuln.get('cvssScore'),
+        'packageName': str(vuln.get('packageName', 'N/A') or 'N/A'),
+        'version': str(vuln.get('version', 'N/A') or 'N/A'),
+        'fixedIn': sorted(set(normalized_fixed_in)),
+        'fixable': fixed_available,
         'cve': cve_ids,
-        'cveDisclosureDate': cve_disclosure_date,
-        'snykPublicationDate': snyk_publication_date,
-        'from': vuln.get('from', []),
-        'url': primary_url,
+        'snykPublicationDate': str(snyk_publication_date)
+        if snyk_publication_date
+        else None,
       }
+      continue
+
+    existing = aggregated_vulns[vulnerability_id]
+    existing_severity = existing['severity']
+    if severity != existing_severity and vulnerability_id not in severity_mismatch_logged:
+      log_info(
+        'Severity mismatch detected for '
+        f'{vulnerability_id}: existing={existing_severity}, incoming={severity}. '
+        'Keeping highest severity for aggregated record.'
+      )
+      severity_mismatch_logged.add(vulnerability_id)
+
+    if severity_rank[severity] > severity_rank[existing['severity']]:
+      existing['severity'] = severity
+    existing['cve'] = sorted(set(existing['cve']) | set(cve_ids))
+    existing['fixedIn'] = sorted(set(existing['fixedIn']) | set(normalized_fixed_in))
+    existing['fixable'] = existing['fixable'] or fixed_available
+    existing['snykPublicationDate'] = choose_earliest_iso(
+      existing.get('snykPublicationDate'),
+      snyk_publication_date,
     )
 
-    scan_summary['summary']['snyk']['severity'][severity] = (
-      scan_summary['summary']['snyk']['severity'].get(severity, 0) + 1
+  scan_summary['scan_result']['snyk-vulns'] = list(aggregated_vulns.values())
+  for vuln in scan_summary['scan_result']['snyk-vulns']:
+    severity = vuln.get('severity', 'UNKNOWN')
+    severity_summary = scan_summary['summary']['snyk']['severity'].setdefault(
+      severity,
+      {
+        'total': 0,
+        'fixable': 0,
+        'unfixable': 0,
+      },
     )
-    scan_summary['summary']['snyk']['fixable'][fixable_bucket] = (
-      scan_summary['summary']['snyk']['fixable'].get(fixable_bucket, 0) + 1
-    )
+    severity_summary['total'] += 1
+    if vuln.get('fixable', False):
+      severity_summary['fixable'] += 1
+    else:
+      severity_summary['unfixable'] += 1
     scan_summary['summary']['snyk']['total'] += 1
 
   return scan_summary

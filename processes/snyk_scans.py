@@ -223,7 +223,11 @@ def send_summary_to_slack(sc, slack):
       snyk_summary = summary.get('snyk', {})
 
       if snyk_summary:
-        for severity, count in snyk_summary.get('severity', {}).items():
+        for severity, severity_data in snyk_summary.get('severity', {}).items():
+          if isinstance(severity_data, dict):
+            count = int(severity_data.get('total', 0) or 0)
+          else:
+            count = int(severity_data or 0)
           if severity in severity_count:
             severity_count[severity] += count
           else:
