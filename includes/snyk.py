@@ -362,7 +362,6 @@ def scan_result_summary(scan_result):
     snyk_id = str(vuln.get('id', ''))
     if not snyk_id:
       continue
-
     severity = str(vuln.get('severity', 'UNKNOWN')).upper()
     if severity not in severity_rank:
       severity = 'UNKNOWN'
