@@ -9,7 +9,6 @@ from hmpps.services.job_log_handling import (
   job,
 )
 
-
 def get_image_list(sc):
   environments_data = sc.get_all_records(sc.environments_get)
   if not environments_data:
@@ -40,6 +39,24 @@ def delete_sc_snyk_scan_results(sc):
       log_error(f'Error deleting Snyk scan record with ID {record_document_id}: {e}')
       job.error_messages.append(
         f'Error deleting Snyk scan record with ID {record_document_id}: {e}'
+      )
+  snyk_vulnerabilities_data = sc.get_all_records('snyk-vulnerabilities')
+  for record in snyk_vulnerabilities_data:
+    if job.name == 'hmpps-snyk-discovery-incremental':
+      if not record.get('name', '').startswith('hmpps-base-container-images'):
+        continue
+
+    record_document_id = record.get('documentId')
+    try:
+      sc.delete('snyk-vulnerabilities', record_document_id)
+      log_info(f'Deleted Snyk vulnerability record with ID: {record_document_id}')
+    except requests.exceptions.RequestException as e:
+      log_error(
+        'Error deleting Snyk vulnerability record with ID '
+        f'{record_document_id}: {e}'
+      )
+      job.error_messages.append(
+        f'Error deleting Snyk vulnerability record with ID {record_document_id}: {e}'
       )
 
 
@@ -120,27 +137,20 @@ def extract_image_list(environments_data):
   return filtered_components
 
 
-def update(sc, component, image_tag, image_id, scan_summary, scan_status='Succeeded'):
-  snyk_scan_data = {
-    'name': component,
-    'build_image_tag': image_tag,
-    'image_id': image_id,
-    'snyk_scan_timestamp': datetime.now().isoformat(),
-    'scan_summary': scan_summary,
-    'scan_status': scan_status,
-    'environments': [],
-  }
-
-  if 'hmpps-base-container-images' in snyk_scan_data.get('name', ''):
-    snyk_scan_data['environments'] = ['unknown']
-    response = sc.add('snyk-scans', snyk_scan_data)
-    log_info(f'Added Snyk scan for {snyk_scan_data["name"]} to Service Catalogue.')
-    return
-
-  environments = sc.get_filtered_records('environments', 'component][name', component)
+def update(sc, component, image_tag, image_id, scan_data, scan_status='Succeeded'):
+  counts = scan_data.get('counts', {})
+  snyk_ids = list(set(scan_data.get('snyk_ids', [])))
+  if component.startswith('hmpps-base-container-images'):
+    log_info(f'Processing base container image: {component}')
+    environments = []
+  else:
+    environments = (
+      sc.get_filtered_records('environments', 'component][name', component) or []
+    )
   environment_names = []
   environment_document_ids = []
   missing_images_environments_ids = []
+
   if image_tag == 'latest':
     environment_names.append('unknown')
     for environment in environments:
@@ -151,43 +161,56 @@ def update(sc, component, image_tag, image_id, scan_summary, scan_status='Succee
         document_id = environment.get('documentId')
         environment_names.append(environment.get('name'))
         environment_document_ids.append(document_id)
-  snyk_scan_data['environments'] = environment_names
-  log_info(
-    f'Scan data upload size for {component}: '
-    f'{int(len(json.dumps(snyk_scan_data.get("scan_summary", {}))) / 1024)}kB'
-  )
-  if response := sc.add('snyk-scans', snyk_scan_data):
-    snyk_scan_document_id = response.get('data', {}).get('documentId', '')
 
-    if snyk_scan_document_id:
-      # it will skip this if there aren't any
-      for environment_document_id in environment_document_ids:
-        sc.update(
-          'environments',
-          environment_document_id,
-          {'snyk_scan': snyk_scan_document_id},
-        )
-        log_info(
-          f'Updated environment {environment_document_id} with Snyk scan ID: '
-          f'{snyk_scan_document_id}'
-        )
-      # it will skip this if there aren't any
-      for environment_document_id in missing_images_environments_ids:
-        sc.update(
-          'environments',
-          environment_document_id,
-          {'snyk_scan': snyk_scan_document_id},
-        )
-        log_info(
-          f'Updated environment {environment_document_id} with Snyk scan ID: '
-          f'{snyk_scan_document_id}'
-        )
+  if not environment_names:
+    environment_names = ['unknown']
 
-      if not (environment_document_ids or missing_images_environments_ids):
-        log_warning(f'No environments found for {component}')
-    else:
-      log_warning(f'No snyk_scan_document_id found for {component}')
-
+  for env_name in environment_names:
+    snyk_scan_data = {
+      'name': component,
+      'build_image_tag': image_tag,
+      'image_id': image_id,
+      'snyk_scan_timestamp': datetime.now().isoformat(),
+      'scan_status': scan_status,
+      'critical_fixable': counts.get('critical_fixable', 0),
+      'critical_unfixable': counts.get('critical_unfixable', 0),
+      'high_fixable': counts.get('high_fixable', 0),
+      'high_unfixable': counts.get('high_unfixable', 0),
+      'medium_fixable': counts.get('medium_fixable', 0),
+      'medium_unfixable': counts.get('medium_unfixable', 0),
+      'low_fixable': counts.get('low_fixable', 0),
+      'low_unfixable': counts.get('low_unfixable', 0),
+      'unknown_fixable': counts.get('unknown_fixable', 0),
+      'unknown_unfixable': counts.get('unknown_unfixable', 0),
+      'snyk_ids': snyk_ids,
+      'environment_name': env_name,
+    }
+    if response := sc.add('snyk-scans', snyk_scan_data):
+      snyk_scan_document_id = response.get('data', {}).get('documentId', '')
+      
+      if snyk_scan_document_id:
+        for environment_document_id in environment_document_ids:
+          sc.update(
+            'environments',
+            environment_document_id,
+            {'snyk_scan': snyk_scan_document_id},
+          )
+          log_info(
+            f'Updated environment {environment_document_id} with Snyk scan ID: '
+            f'{snyk_scan_document_id}'
+          )
+        for environment_document_id in missing_images_environments_ids:
+          sc.update(
+            'environments',
+            environment_document_id,
+            {'snyk_scan': snyk_scan_document_id},
+          )
+          log_info(
+            f'Updated environment {environment_document_id} with Snyk scan ID: '
+            f'{snyk_scan_document_id}'
+          )
+      else:
+        log_warning(f'No snyk_scan_document_id found for {component}')
 
 def send_summary_to_slack(sc, slack):
   snyk_data = sc.get_all_records('snyk-scans?populate=*')
@@ -219,26 +242,31 @@ def send_summary_to_slack(sc, slack):
     base_image_name = record.get('name', 'Unknown Image')
     scan_status = record.get('scan_status', 'Unknown')
     if scan_status == 'Succeeded':
-      summary = record.get('scan_summary', {}).get('summary', {})
-      snyk_summary = summary.get('snyk', {})
+      record_counts = {
+        'CRITICAL': int(record.get('critical_fixable', 0) or 0)
+        + int(record.get('critical_unfixable', 0) or 0),
+        'HIGH': int(record.get('high_fixable', 0) or 0)
+        + int(record.get('high_unfixable', 0) or 0),
+        'MEDIUM': int(record.get('medium_fixable', 0) or 0)
+        + int(record.get('medium_unfixable', 0) or 0),
+        'LOW': int(record.get('low_fixable', 0) or 0)
+        + int(record.get('low_unfixable', 0) or 0),
+        'UNKNOWN': int(record.get('unknown_fixable', 0) or 0)
+        + int(record.get('unknown_unfixable', 0) or 0),
+      }
 
-      if snyk_summary:
-        for severity, count in snyk_summary.get('severity', {}).items():
-          if severity in severity_count:
-            severity_count[severity] += count
+      for severity, count in record_counts.items():
+        if severity in severity_count:
+          severity_count[severity] += count
+        else:
+          severity_count['UNKNOWN'] += count
+        total_vulnerabilities += count
+        if base_image_name.startswith('hmpps-base-container-images'):
+          if severity in base_image_severity_count:
+            base_image_severity_count[severity] += count
           else:
-            severity_count['UNKNOWN'] += count
-          total_vulnerabilities += count
-          if base_image_name.startswith('hmpps-base-container-images'):
-            if severity in base_image_severity_count:
-              base_image_severity_count[severity] += count
-            else:
-              base_image_severity_count['UNKNOWN'] += count
-            base_image_total_vulnerabilities += count
-      else:
-        log_warning(
-          f'Skipping {base_image_name} in summary: missing summary.snyk block'
-        )
+            base_image_severity_count['UNKNOWN'] += count
+          base_image_total_vulnerabilities += count
 
   summary_message = (
     f'*Snyk Scan Summary:*\n'
@@ -285,3 +313,147 @@ def send_summary_to_slack(sc, slack):
     )
     slack.alert(alert_message)
     log_info('Sent slack alert for significant vulnerabilities in base images.')
+
+
+def update_scan_cve_details(sc):
+  """Populate snyk-scans with CVE details for each snyk_id at end of job."""
+  snyk_scan_records = sc.get_all_records('snyk-scans') or []
+  if not snyk_scan_records:
+    log_info('No snyk-scans records found for CVE enrichment.')
+    return
+
+  vulnerability_records = sc.get_all_records('snyk-vulnerabilities') or []
+  snyk_id_to_cves = {
+    record.get('snyk_id'): sorted(set(record.get('cves') or []))
+    for record in vulnerability_records
+    if record.get('snyk_id')
+  }
+
+  for scan_record in snyk_scan_records:
+    document_id = scan_record.get('documentId')
+    snyk_ids = scan_record.get('snyk_ids') or []
+    if not document_id or not snyk_ids:
+      continue
+
+    snyk_cves = [
+      {
+        'snyk_id': snyk_id,
+        'cves': snyk_id_to_cves.get(snyk_id, []),
+      }
+      for snyk_id in snyk_ids
+    ]
+
+    if scan_record.get('snyk_cves') == snyk_cves:
+      continue
+
+    try:
+      sc.update('snyk-scans', document_id, {'snyk_cves': snyk_cves})
+      log_info(f'Updated snyk_cves for snyk-scan record {document_id}')
+    except Exception as e:
+      log_error(f'Failed updating snyk_cves for snyk-scan record {document_id}: {e}')
+
+def upsert_vulnerabilities(sc, vulnerabilities):
+  severity_rank = {
+    'CRITICAL': 4,
+    'HIGH': 3,
+    'MEDIUM': 2,
+    'LOW': 1,
+    'UNKNOWN': 0,
+  }
+
+  for vuln in vulnerabilities:
+    log_info('Processing vulnerability: ' + json.dumps(vuln))
+    snyk_id = vuln.get('id')
+    if not snyk_id:
+      continue
+
+    existing_records = sc.get_all_records(
+      f'snyk-vulnerabilities?filters[snyk_id][$eq]={snyk_id}'
+    )
+
+    new_cves = vuln.get('cve', [])
+    new_fixed_versions = sorted(set(vuln.get('fixedIn', [])))
+    new_affected_versions = (
+      sorted(set([vuln.get('version')])) if vuln.get('version') else []
+    )
+    new_severity = vuln.get('severity', 'UNKNOWN').upper()
+    publication_date = vuln.get('snykPublicationDate')
+    if isinstance(publication_date, str) and 'T' in publication_date:
+      # Strapi `date` fields expect YYYY-MM-DD, not a full timestamp.
+      publication_date = publication_date.split('T', 1)[0]
+
+    snyk_vulnerability_payload = {
+      'snyk_id': snyk_id,
+      'title': vuln.get('title'),
+      'description': vuln.get('description') or vuln.get('title') or '',
+      'severity': new_severity,
+      'cves': new_cves,
+      'published_date': publication_date,
+      'fix_available': str(bool(vuln.get('fixable'))),
+      'affected_package_name': vuln.get('name') or vuln.get('packageName'),
+      'affected_versions': new_affected_versions,
+      'cvss_score': vuln.get('cvssScore'),
+      'exploit_maturity': vuln.get('exploitMaturity') or 'UNKNOWN',
+      'fixed_versions': new_fixed_versions,
+    }
+
+    if not existing_records:
+      log_info(f'Adding new vulnerability {snyk_id} to snyk-vulnerabilities collection')
+      log_info(
+        f'Payload for new vulnerability {snyk_id}: '
+        f'{json.dumps(snyk_vulnerability_payload)}'
+      )
+      # add_snyk_vulnerability(sc, snyk_vulnerability_payload)
+      sc.add('snyk-vulnerabilities', snyk_vulnerability_payload)
+      continue
+
+    existing = existing_records[0]
+
+    existing_severity = str(existing.get('severity', 'UNKNOWN')).upper()
+    existing_cves = existing.get('cves') or []
+    existing_fixed_versions = sorted(set(existing.get('fixed_versions') or []))
+    existing_affected_versions = sorted(set(existing.get('affected_versions') or []))
+    normalized_existing_cves = sorted(set(existing_cves))
+    normalized_new_cves = sorted(set(new_cves))
+    merged_cves = sorted(set(normalized_existing_cves) | set(normalized_new_cves))
+    merged_fixed_versions = sorted(
+      set(existing_fixed_versions) | set(new_fixed_versions)
+    )
+    merged_affected_versions = sorted(
+      set(existing_affected_versions) | set(new_affected_versions)
+    )
+
+    final_severity = existing_severity
+    if severity_rank.get(new_severity, 0) > severity_rank.get(existing_severity, 0):
+      final_severity = new_severity
+
+    if (
+      final_severity == existing_severity
+      and merged_cves == normalized_existing_cves
+      and merged_fixed_versions == existing_fixed_versions
+      and merged_affected_versions == existing_affected_versions
+    ):
+      log_info(
+        f'No change for vulnerability {snyk_id}; skipping snyk-vulnerabilities update'
+      )
+      continue
+
+    update_snyk_vulnerability_payload = {
+      'severity': final_severity,
+      'cves': merged_cves,
+      'fixed_versions': merged_fixed_versions,
+      'affected_versions': merged_affected_versions,
+    }
+
+    try:
+      log_info(
+        f'Updating existing vulnerability {snyk_id} '
+        'in snyk-vulnerabilities collection'
+      )
+      sc.update(
+        'snyk-vulnerabilities',
+        existing.get('documentId'),
+        update_snyk_vulnerability_payload,
+      )
+    except Exception as e:
+      log_error(f'Failed updating vuln {snyk_id}: {e}')
