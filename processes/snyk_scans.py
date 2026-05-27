@@ -51,7 +51,10 @@ def delete_sc_snyk_scan_results(sc):
       sc.delete('snyk-vulnerabilities', record_document_id)
       log_info(f'Deleted Snyk vulnerability record with ID: {record_document_id}')
     except requests.exceptions.RequestException as e:
-      log_error(f'Error deleting Snyk vulnerability record with ID {record_document_id}: {e}')
+      log_error(
+        'Error deleting Snyk vulnerability record with ID '
+        f'{record_document_id}: {e}'
+      )
       job.error_messages.append(
         f'Error deleting Snyk vulnerability record with ID {record_document_id}: {e}'
       )
@@ -396,7 +399,10 @@ def upsert_vulnerabilities(sc, vulnerabilities):
 
     if not existing_records:
       log_info(f'Adding new vulnerability {snyk_id} to snyk-vulnerabilities collection')
-      log_info(f'Payload for new vulnerability {snyk_id}: {json.dumps(snyk_vulnerability_payload)}')
+      log_info(
+        f'Payload for new vulnerability {snyk_id}: '
+        f'{json.dumps(snyk_vulnerability_payload)}'
+      )
       # add_snyk_vulnerability(sc, snyk_vulnerability_payload)
       sc.add('snyk-vulnerabilities', snyk_vulnerability_payload)
       continue
@@ -440,7 +446,14 @@ def upsert_vulnerabilities(sc, vulnerabilities):
     }
 
     try:
-      log_info(f'Updating existing vulnerability {snyk_id} in snyk-vulnerabilities collection')
-      sc.update('snyk-vulnerabilities', existing.get('documentId'), update_snyk_vulnerability_payload)
+      log_info(
+        f'Updating existing vulnerability {snyk_id} '
+        'in snyk-vulnerabilities collection'
+      )
+      sc.update(
+        'snyk-vulnerabilities',
+        existing.get('documentId'),
+        update_snyk_vulnerability_payload,
+      )
     except Exception as e:
       log_error(f'Failed updating vuln {snyk_id}: {e}')
