@@ -1,5 +1,8 @@
 #!/usr/bin/env python
+import os
 import sys
+from urllib.parse import urlparse
+
 from hmpps import ServiceCatalogue, Slack
 import processes.snyk_scans as snyk_scans
 import includes.snyk as snyk
@@ -8,11 +11,29 @@ from hmpps.services.job_log_handling import (
   log_error,
   log_info,
   log_critical,
+  log_warning,
   job,
 )
 
 # Set maximum number of concurrent threads to run, try to avoid secondary
 # github api limits.
+
+
+def _normalise_service_catalogue_endpoint_for_local_testing():
+  endpoint = os.getenv('SERVICE_CATALOGUE_API_ENDPOINT', '').strip()
+  if not endpoint:
+    return
+
+  parsed = urlparse(endpoint)
+  is_local = parsed.hostname in {'localhost', '127.0.0.1'}
+
+  if parsed.scheme == 'https' and is_local:
+    local_http_endpoint = endpoint.replace('https://', 'http://', 1)
+    os.environ['SERVICE_CATALOGUE_API_ENDPOINT'] = local_http_endpoint
+    log_warning(
+      'Using HTTP for local Service Catalogue endpoint '
+      f'({local_http_endpoint})'
+    )
 
 
 def main():
@@ -33,6 +54,7 @@ def main():
     sys.exit(1)
 
   slack = Slack()
+  _normalise_service_catalogue_endpoint_for_local_testing()
   sc = ServiceCatalogue()
 
   if not sc.connection_ok:
@@ -52,8 +74,9 @@ def main():
 
   image_list = snyk_scans.get_image_list(sc=sc)
   snyk_scans.delete_sc_snyk_scan_results(sc=sc)
-  snyk.scan_prod_image(sc=sc, image_list=image_list)
+  snyk.scan_deployed_image(sc=sc, image_list=image_list)
   snyk.scan_hmpps_base_container_images(sc=sc)
+  snyk_scans.update_scan_cve_details(sc=sc)
   snyk_scans.send_summary_to_slack(sc=sc, slack=slack)
   if job.error_messages:
     sc.update_scheduled_job('Errors')

@@ -307,14 +307,16 @@ def scan_component_image(services, component, retry_count):
       retry_count,
       cache_dir=thread_cache_dir,
     )
+    vulnerabilities = []
 
     # Summarize the scan results
     if not result_json or (isinstance(result_json, dict) and result_json.get('error')):
       scan_status = 'Failed'
-      scan_summary = {}
+      scan_data = {}
     else:
       scan_status = 'Succeeded'
-      scan_summary = scan_result_summary(result_json)
+      scan_data = scan_result_summary(result_json)
+      vulnerabilities = scan_data.get('vulnerabilities', [])
 
     # Update the scan results
     snyk_scans.update(
@@ -322,9 +324,10 @@ def scan_component_image(services, component, retry_count):
       component_name,
       component_build_image_tag,
       image_id,
-      scan_summary,
+      scan_data,
       scan_status,
     )
+    return vulnerabilities
   finally:
     cleanup_docker_after_scan(image_name)
     cleanup_snyk_cache_after_scan(image_name, cache_dir=thread_cache_dir)
@@ -339,133 +342,98 @@ def scan_result_summary(scan_result):
     'UNKNOWN': 0,
   }
 
-  scan_summary = {
-    'scan_result': {},
-    'summary': {
-      'snyk': {
-        'severity': {
-          'CRITICAL': {
-            'total': 0,
-            'fixable': 0,
-            'unfixable': 0,
-          },
-          'HIGH': {
-            'total': 0,
-            'fixable': 0,
-            'unfixable': 0,
-          },
-          'MEDIUM': {
-            'total': 0,
-            'fixable': 0,
-            'unfixable': 0,
-          },
-          'LOW': {
-            'total': 0,
-            'fixable': 0,
-            'unfixable': 0,
-          },
-          'UNKNOWN': {
-            'total': 0,
-            'fixable': 0,
-            'unfixable': 0,
-          },
-        },
-        'total': 0,
-      },
-    },
+  summary = {
+    'critical_fixable': 0,
+    'critical_unfixable': 0,
+    'high_fixable': 0,
+    'high_unfixable': 0,
+    'medium_fixable': 0,
+    'medium_unfixable': 0,
+    'low_fixable': 0,
+    'low_unfixable': 0,
+    'unknown_fixable': 0,
+    'unknown_unfixable': 0,
   }
 
   aggregated_vulns = {}
-  severity_mismatch_logged = set()
 
-  def choose_earliest_iso(existing_value, new_value):
-    if not new_value:
-      return existing_value
-    if not existing_value:
-      return str(new_value)
-    existing = str(existing_value)
-    candidate = str(new_value)
-    return candidate if candidate < existing else existing
+  for vuln in scan_result.get('vulnerabilities', []):
+    log_debug(f'Results for vulnerability: {json.dumps(vuln, indent=2)}')
+    snyk_id = str(vuln.get('id', ''))
+    if not snyk_id:
+      continue
 
-  vulnerabilities = scan_result.get('vulnerabilities', [])
-  for vuln in vulnerabilities:
     severity = str(vuln.get('severity', 'UNKNOWN')).upper()
     if severity not in severity_rank:
       severity = 'UNKNOWN'
 
     fixed_versions = vuln.get('fixedIn', [])
-    normalized_fixed_in = []
-    if isinstance(fixed_versions, list):
-      normalized_fixed_in = [str(version) for version in fixed_versions if version]
-    elif fixed_versions:
-      normalized_fixed_in = [str(fixed_versions)]
+    is_fixable = bool(fixed_versions)
+    cvss_score = vuln.get('cvssScore')
+    if cvss_score is None:
+      cvss_details = vuln.get('cvssDetails') or []
+      cvss_sources = vuln.get('cvssSources') or []
+      if cvss_details and isinstance(cvss_details[0], dict):
+        cvss_score = cvss_details[0].get('cvssV3BaseScore')
+      if cvss_score is None and cvss_sources and isinstance(cvss_sources[0], dict):
+        cvss_score = cvss_sources[0].get('baseScore')
 
-    vulnerability_id = str(vuln.get('id', 'N/A'))
-    cve_ids = vuln.get('identifiers', {}).get('CVE', [])
-    snyk_publication_date = vuln.get('publicationTime')
-    if not isinstance(cve_ids, list):
-      cve_ids = []
-    cve_ids = sorted({str(cve_id) for cve_id in cve_ids if cve_id})
-    fixed_available = bool(normalized_fixed_in)
-
-    if vulnerability_id not in aggregated_vulns:
-      aggregated_vulns[vulnerability_id] = {
-        'id': vulnerability_id,
-        'title': str(vuln.get('title', '') or ''),
-        'severity': severity,
-        'packageName': str(vuln.get('packageName', 'N/A') or 'N/A'),
-        'version': str(vuln.get('version', 'N/A') or 'N/A'),
-        'fixedIn': sorted(set(normalized_fixed_in)),
-        'fixable': fixed_available,
-        'cve': cve_ids,
-        'snykPublicationDate': str(snyk_publication_date)
-        if snyk_publication_date
-        else None,
-      }
-      continue
-
-    existing = aggregated_vulns[vulnerability_id]
-    existing_severity = existing['severity']
-    if severity != existing_severity and vulnerability_id not in severity_mismatch_logged:
-      log_info(
-        'Severity mismatch detected for '
-        f'{vulnerability_id}: existing={existing_severity}, incoming={severity}. '
-        'Keeping highest severity for aggregated record.'
+    exploit_maturity = vuln.get('exploitMaturity')
+    if not exploit_maturity:
+      maturity_levels = (vuln.get('exploitDetails') or {}).get('maturityLevels', [])
+      primary_maturity = next(
+        (
+          level.get('level')
+          for level in maturity_levels
+          if isinstance(level, dict)
+          and level.get('type') == 'primary'
+          and level.get('level')
+        ),
+        None,
       )
-      severity_mismatch_logged.add(vulnerability_id)
+      secondary_maturity = next(
+        (
+          level.get('level')
+          for level in maturity_levels
+          if isinstance(level, dict)
+          and level.get('type') == 'secondary'
+          and level.get('level')
+        ),
+        None,
+      )
+      exploit_maturity = primary_maturity or secondary_maturity or vuln.get('exploit')
 
-    if severity_rank[severity] > severity_rank[existing['severity']]:
-      existing['severity'] = severity
-    existing['cve'] = sorted(set(existing['cve']) | set(cve_ids))
-    existing['fixedIn'] = sorted(set(existing['fixedIn']) | set(normalized_fixed_in))
-    existing['fixable'] = existing['fixable'] or fixed_available
-    existing['snykPublicationDate'] = choose_earliest_iso(
-      existing.get('snykPublicationDate'),
-      snyk_publication_date,
-    )
+    if snyk_id not in aggregated_vulns:
+      aggregated_vulns[snyk_id] = {
+        'id': snyk_id,
+        'title': vuln.get('title'),
+        'description': vuln.get('description'),
+        'severity': severity,
+        'name': vuln.get('name'),
+        'packageName': vuln.get('packageName'),
+        'version': vuln.get('version'),
+        'fixedIn': fixed_versions,
+        'fixable': is_fixable,
+        'cvssScore': cvss_score,
+        'exploitMaturity': exploit_maturity,
+        'cve': vuln.get('identifiers', {}).get('CVE', []),
+        'snykPublicationDate': vuln.get('publicationTime')
+      }
 
-  scan_summary['scan_result']['snyk-vulns'] = list(aggregated_vulns.values())
-  for vuln in scan_summary['scan_result']['snyk-vulns']:
-    severity = vuln.get('severity', 'UNKNOWN')
-    severity_summary = scan_summary['summary']['snyk']['severity'].setdefault(
-      severity,
-      {
-        'total': 0,
-        'fixable': 0,
-        'unfixable': 0,
-      },
-    )
-    severity_summary['total'] += 1
-    if vuln.get('fixable', False):
-      severity_summary['fixable'] += 1
-    else:
-      severity_summary['unfixable'] += 1
-    scan_summary['summary']['snyk']['total'] += 1
+  for v in aggregated_vulns.values():
+    severity = v['severity'].lower()
+    key = f"{severity}_{'fixable' if v['fixable'] else 'unfixable'}"
+    if key not in summary:
+      key = 'unknown_fixable' if v['fixable'] else 'unknown_unfixable'
+    summary[key] += 1
 
-  return scan_summary
+  return {
+    'counts': summary,
+    'vulnerabilities': list(aggregated_vulns.values()),
+    'snyk_ids': list(aggregated_vulns.keys())
+  }
 
-
-def scan_prod_image(sc, image_list):
+def scan_deployed_image(sc, image_list):
   valid_components = [
     component
     for component in image_list
@@ -483,7 +451,9 @@ def scan_prod_image(sc, image_list):
         f'Started Snyk scan for {component["component_name"]} - {count}/{qty} '
         f'images ({int((count / qty) * 100)}%)'
       )
-      scan_component_image(sc, component, 1)
+      component_vulnerabilities = scan_component_image(sc, component, 1) or []
+      if component_vulnerabilities:
+        snyk_scans.upsert_vulnerabilities(sc, component_vulnerabilities)
   else:
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
       future_to_component = {
@@ -495,7 +465,9 @@ def scan_prod_image(sc, image_list):
         completed += 1
         component = future_to_component[future]
         try:
-          future.result()
+          component_vulnerabilities = future.result() or []
+          if component_vulnerabilities:
+            snyk_scans.upsert_vulnerabilities(sc, component_vulnerabilities)
         except Exception as e:
           log_error(
             f'Scan worker failed for {component.get("component_name", "unknown")}: {e}'
