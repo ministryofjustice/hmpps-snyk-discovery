@@ -218,7 +218,7 @@ def parse_snyk_json_output(output_text):
 
 def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   log_info(f'Running Snyk scan on {image_name}')
-  command = [snyk_binary, 'container', 'test', image_name, '--json']
+  command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
     result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
@@ -357,12 +357,17 @@ def scan_result_summary(scan_result):
 
   aggregated_vulns = {}
 
-  for vuln in scan_result.get('vulnerabilities', []):
+  all_vulnerabilities = list(scan_result.get('vulnerabilities', []))
+  for application in scan_result.get('applications', []):
+    application_vulns = application.get('vulnerabilities', [])
+    if isinstance(application_vulns, list):
+      all_vulnerabilities.extend(application_vulns)
+
+  for vuln in all_vulnerabilities:
     log_debug(f'Results for vulnerability: {json.dumps(vuln, indent=2)}')
     snyk_id = str(vuln.get('id', ''))
     if not snyk_id:
       continue
-
     severity = str(vuln.get('severity', 'UNKNOWN')).upper()
     if severity not in severity_rank:
       severity = 'UNKNOWN'
@@ -409,6 +414,7 @@ def scan_result_summary(scan_result):
         'title': vuln.get('title'),
         'description': vuln.get('description'),
         'severity': severity,
+        'language': vuln.get('language') or 'unknown',
         'name': vuln.get('name'),
         'packageName': vuln.get('packageName'),
         'version': vuln.get('version'),

@@ -377,6 +377,7 @@ def upsert_vulnerabilities(sc, vulnerabilities):
       sorted(set([vuln.get('version')])) if vuln.get('version') else []
     )
     new_severity = vuln.get('severity', 'UNKNOWN').upper()
+    new_language = str(vuln.get('language') or '').strip()
     publication_date = vuln.get('snykPublicationDate')
     if isinstance(publication_date, str) and 'T' in publication_date:
       # Strapi `date` fields expect YYYY-MM-DD, not a full timestamp.
@@ -387,6 +388,7 @@ def upsert_vulnerabilities(sc, vulnerabilities):
       'title': vuln.get('title'),
       'description': vuln.get('description') or vuln.get('title') or '',
       'severity': new_severity,
+      'language': new_language or 'unknown',
       'cves': new_cves,
       'published_date': publication_date,
       'fix_available': str(bool(vuln.get('fixable'))),
@@ -403,13 +405,13 @@ def upsert_vulnerabilities(sc, vulnerabilities):
         f'Payload for new vulnerability {snyk_id}: '
         f'{json.dumps(snyk_vulnerability_payload)}'
       )
-      # add_snyk_vulnerability(sc, snyk_vulnerability_payload)
       sc.add('snyk-vulnerabilities', snyk_vulnerability_payload)
       continue
 
     existing = existing_records[0]
 
     existing_severity = str(existing.get('severity', 'UNKNOWN')).upper()
+    existing_language = str(existing.get('language') or '').strip()
     existing_cves = existing.get('cves') or []
     existing_fixed_versions = sorted(set(existing.get('fixed_versions') or []))
     existing_affected_versions = sorted(set(existing.get('affected_versions') or []))
@@ -424,11 +426,13 @@ def upsert_vulnerabilities(sc, vulnerabilities):
     )
 
     final_severity = existing_severity
+    final_language = existing_language or new_language or 'unknown'
     if severity_rank.get(new_severity, 0) > severity_rank.get(existing_severity, 0):
       final_severity = new_severity
 
     if (
       final_severity == existing_severity
+      and final_language == existing_language
       and merged_cves == normalized_existing_cves
       and merged_fixed_versions == existing_fixed_versions
       and merged_affected_versions == existing_affected_versions
@@ -440,6 +444,7 @@ def upsert_vulnerabilities(sc, vulnerabilities):
 
     update_snyk_vulnerability_payload = {
       'severity': final_severity,
+      'language': final_language,
       'cves': merged_cves,
       'fixed_versions': merged_fixed_versions,
       'affected_versions': merged_affected_versions,
