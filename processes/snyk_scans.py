@@ -10,40 +10,6 @@ from hmpps.services.job_log_handling import (
   job,
 )
 
-
-def add_snyk_vulnerability(payload):
-  endpoint = os.getenv('SERVICE_CATALOGUE_API_ENDPOINT', '').strip().rstrip('/')
-  api_key = os.getenv('SERVICE_CATALOGUE_API_KEY', '').strip()
-  if not endpoint:
-    log_error(
-      'SERVICE_CATALOGUE_API_ENDPOINT is not set; '
-      'cannot insert into snyk-vulnerabilities'
-    )
-    return None
-  url = f'{endpoint}/v1/snyk-vulnerabilities'
-
-  headers = {
-    'Content-Type': 'application/json',
-  }
-  if api_key:
-    headers['X-API-KEY'] = api_key
-
-  try:
-    response = requests.post(
-      url,
-      headers=headers,
-      json={'data': payload},
-      timeout=30,
-    )
-    response.raise_for_status()
-    return response.json().get('data')
-  except requests.exceptions.RequestException as e:
-    log_error(
-      'Error adding a record to snyk-vulnerabilities in service catalogue: '
-      f'{e}'
-    )
-    return None
-
 def get_image_list(sc):
   environments_data = sc.get_all_records(sc.environments_get)
   if not environments_data:
@@ -440,7 +406,7 @@ def upsert_vulnerabilities(sc, vulnerabilities):
         f'Payload for new vulnerability {snyk_id}: '
         f'{json.dumps(snyk_vulnerability_payload)}'
       )
-      add_snyk_vulnerability(snyk_vulnerability_payload)
+      sc.add('snyk-vulnerabilities', snyk_vulnerability_payload)
       continue
 
     existing = existing_records[0]
