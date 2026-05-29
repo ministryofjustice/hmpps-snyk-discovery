@@ -1,6 +1,5 @@
 import requests
 import json
-import os
 from datetime import datetime
 from hmpps.services.job_log_handling import (
   log_debug,
