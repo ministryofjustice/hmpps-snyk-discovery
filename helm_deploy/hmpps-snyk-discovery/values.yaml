@@ -9,7 +9,7 @@ generic-prometheus-alerts:
 
 snykScanCronJob:
   env:
-    SNYK_MAX_WORKERS: "4"
+    SNYK_MAX_WORKERS: "2"
     PATH: "/home/appuser/.local:/usr/local/bin:$PATH"
   resources:
     requests:
