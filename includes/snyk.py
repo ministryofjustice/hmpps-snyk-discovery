@@ -448,7 +448,7 @@ def scan_deployed_image(sc, image_list):
   qty = len(valid_components)
   log_info(f'Starting scan for {qty} images...')
 
-  max_workers = max(1, min(get_env_int('SNYK_MAX_WORKERS', 4), qty or 1))
+  max_workers = max(1, min(get_env_int('SNYK_MAX_WORKERS', 2), qty or 1))
   log_info(f'Running Snyk scans with {max_workers} worker threads.')
 
   if max_workers == 1:
