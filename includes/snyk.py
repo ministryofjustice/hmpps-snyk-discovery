@@ -55,34 +55,8 @@ def get_thread_cache_dir():
 
 
 def cleanup_docker_after_scan(image_name):
-  if not get_env_bool('SNYK_DOCKER_CLEANUP', default=True):
-    return
-
-  try:
-    log_info(f'Running Docker cleanup for scanned image: {image_name}')
-    subprocess.run(
-      ['docker', 'image', 'rm', image_name],
-      capture_output=True,
-      text=True,
-      check=False,
-    )
-
-    # Optional extra cleanup for high-pressure environments.
-    if get_env_bool('SNYK_DOCKER_PRUNE', default=False):
-      subprocess.run(
-        ['docker', 'image', 'prune', '-f'],
-        capture_output=True,
-        text=True,
-        check=False,
-      )
-      subprocess.run(
-        ['docker', 'builder', 'prune', '-f'],
-        capture_output=True,
-        text=True,
-        check=False,
-      )
-  except Exception as e:
-    log_debug(f'Docker cleanup failed for {image_name}: {e}')
+  # Pods do not have Docker CLI; keep as a no-op.
+  return
 
 
 def cleanup_snyk_cache_after_scan(image_name, cache_dir=None):
@@ -270,29 +244,9 @@ def ensure_ghcr_login():
     # Keep registry auth available for downstream tooling.
     os.environ['DOCKER_AUTH_CONFIG'] = os.getenv('GHCR_AUTH_CONFIG', '').strip()
 
-    docker_path = shutil.which('docker')
-    if docker_path:
-      log_info('Using docker login for private/internal GHCR image scanning.')
-      login_result = subprocess.run(
-        ['docker', 'login', 'ghcr.io', '-u', ghcr_username, '--password-stdin'],
-        input=ghcr_password,
-        capture_output=True,
-        text=True,
-        check=False,
-      )
-
-      if login_result.returncode != 0:
-        ghcr_login_ok = False
-        error_text = (
-          login_result.stderr
-          or login_result.stdout
-          or 'Unknown docker login error'
-        )
-        return False, f'Failed GHCR docker login: {error_text.strip()}'
-    else:
-      log_info(
-        'Scanning private/internal GHCR images using DOCKER_AUTH_CONFIG registry auth.'
-      )
+    log_info(
+      'Scanning private/internal GHCR images using DOCKER_AUTH_CONFIG registry auth.'
+    )
 
     ghcr_login_ok = True
     return True, None
@@ -312,24 +266,6 @@ def run_snyk_subprocess(command, cache_dir=None):
   )
 
 
-def inspect_image_manifest(image_name):
-  inspect_result = subprocess.run(
-    ['docker', 'manifest', 'inspect', image_name],
-    capture_output=True,
-    text=True,
-    check=False,
-  )
-
-  if inspect_result.returncode != 0:
-    error_text = inspect_result.stderr or inspect_result.stdout or 'Unknown error'
-    return None, error_text.strip()
-
-  try:
-    return json.loads(inspect_result.stdout), None
-  except json.JSONDecodeError as e:
-    return None, f'Failed to parse image manifest for {image_name}: {e}'
-
-
 def _matches_platform(manifest_platform, expected_platform):
   if not isinstance(manifest_platform, dict):
     return False
@@ -346,55 +282,6 @@ def _matches_platform(manifest_platform, expected_platform):
     return False
 
   return True
-
-
-def validate_image_exists_for_platforms(image_name, platforms):
-  manifest_json, manifest_error = inspect_image_manifest(image_name)
-  if manifest_json is None:
-    return (
-      False,
-      f'Image validation failed for {image_name}: manifest lookup failed: '
-      f'{manifest_error}',
-    )
-
-  manifests = (
-    manifest_json.get('manifests')
-    if isinstance(manifest_json, dict)
-    else None
-  )
-  if not isinstance(manifests, list):
-    return True, f'Image validation passed for {image_name}: manifest exists.'
-
-  normalized_platforms = []
-  for platform_name in platforms:
-    parts = platform_name.lower().split('/', 2)
-    if len(parts) < 2:
-      continue
-    expected_os = parts[0]
-    expected_arch = parts[1]
-    expected_variant = parts[2] if len(parts) > 2 else ''
-    normalized_platforms.append((expected_os, expected_arch, expected_variant))
-
-  if not normalized_platforms:
-    return True, f'Image validation passed for {image_name}: manifest exists.'
-
-  for manifest in manifests:
-    platform_data = manifest.get('platform', {})
-    if any(
-      _matches_platform(platform_data, expected)
-      for expected in normalized_platforms
-    ):
-      return (
-        True,
-        f'Image validation passed for {image_name}: platform manifest exists.',
-      )
-
-  platform_list = ', '.join(platforms)
-  return (
-    False,
-    f'Image validation failed for {image_name}: image exists but no manifest '
-    f'for configured fallback platform(s): {platform_list}',
-  )
 
 
 def parse_image_reference(image_name):
@@ -540,6 +427,10 @@ def validate_image_exists_for_platforms_via_registry(image_name, platforms):
   )
 
 
+def validate_image_for_platforms(image_name, platforms):
+  return validate_image_exists_for_platforms_via_registry(image_name, platforms)
+
+
 def parse_snyk_json_output(output_text):
   if not output_text:
     raise ValueError('Snyk scan produced no JSON output')
@@ -568,7 +459,6 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   log_info(f'Running Snyk scan on {image_name}')
   command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
   target_cache_dir = cache_dir or get_thread_cache_dir()
-  docker_cli_available = shutil.which('docker') is not None
   try:
     if image_name.lower().startswith('ghcr.io/'):
       log_info(f'Scanning private/internal GHCR image: {image_name}')
@@ -596,26 +486,14 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
     error_output_lower = error_output.lower()
 
     if 'image does not exist for the current platform' in error_output_lower:
-      if docker_cli_available:
-        image_exists, existence_message = validate_image_exists_for_platforms(
-          image_name,
-          [],
-        )
-        if not image_exists:
-          log_error(existence_message)
-          return {'error': existence_message}, image_name
-        log_info(existence_message)
-      else:
-        image_exists, existence_message = (
-          validate_image_exists_for_platforms_via_registry(
-            image_name,
-            [],
-          )
-        )
-        if not image_exists:
-          log_error(existence_message)
-          return {'error': existence_message}, image_name
-        log_info(existence_message)
+      image_exists, existence_message = validate_image_for_platforms(
+        image_name,
+        [],
+      )
+      if not image_exists:
+        log_error(existence_message)
+        return {'error': existence_message}, image_name
+      log_info(existence_message)
 
       platform_fallbacks = get_platform_fallbacks()
       for platform_name in platform_fallbacks:
@@ -642,26 +520,14 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
         error_output = platform_result.stderr or platform_result.stdout or error_output
         error_output_lower = error_output.lower()
 
-      if docker_cli_available:
-        image_exists, validation_message = validate_image_exists_for_platforms(
-          image_name,
-          platform_fallbacks,
-        )
-        if not image_exists:
-          log_error(validation_message)
-          return {'error': validation_message}, image_name
-        log_info(validation_message)
-      else:
-        image_exists, validation_message = (
-          validate_image_exists_for_platforms_via_registry(
-            image_name,
-            platform_fallbacks,
-          )
-        )
-        if not image_exists:
-          log_error(validation_message)
-          return {'error': validation_message}, image_name
-        log_info(validation_message)
+      image_exists, validation_message = validate_image_for_platforms(
+        image_name,
+        platform_fallbacks,
+      )
+      if not image_exists:
+        log_error(validation_message)
+        return {'error': validation_message}, image_name
+      log_info(validation_message)
 
     if 'no space left on device' in error_output_lower:
       log_error(
