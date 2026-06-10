@@ -265,23 +265,34 @@ def ensure_ghcr_login():
       ghcr_login_ok = False
       return False, credentials_error
 
-    login_result = subprocess.run(
-      ['docker', 'login', 'ghcr.io', '-u', ghcr_username, '--password-stdin'],
-      input=ghcr_password,
-      capture_output=True,
-      text=True,
-      check=False,
-    )
-
     ghcr_login_attempted = True
-    if login_result.returncode != 0:
-      ghcr_login_ok = False
-      error_text = (
-        login_result.stderr
-        or login_result.stdout
-        or 'Unknown docker login error'
+
+    # Keep registry auth available for downstream tooling.
+    os.environ['DOCKER_AUTH_CONFIG'] = os.getenv('GHCR_AUTH_CONFIG', '').strip()
+
+    docker_path = shutil.which('docker')
+    if docker_path:
+      login_result = subprocess.run(
+        ['docker', 'login', 'ghcr.io', '-u', ghcr_username, '--password-stdin'],
+        input=ghcr_password,
+        capture_output=True,
+        text=True,
+        check=False,
       )
-      return False, f'Failed GHCR docker login: {error_text.strip()}'
+
+      if login_result.returncode != 0:
+        ghcr_login_ok = False
+        error_text = (
+          login_result.stderr
+          or login_result.stdout
+          or 'Unknown docker login error'
+        )
+        return False, f'Failed GHCR docker login: {error_text.strip()}'
+    else:
+      log_info(
+        'Docker CLI not found. Skipping docker login and relying on '
+        'DOCKER_AUTH_CONFIG for registry auth.'
+      )
 
     ghcr_login_ok = True
     return True, None
@@ -414,6 +425,7 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   log_info(f'Running Snyk scan on {image_name}')
   command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
   target_cache_dir = cache_dir or get_thread_cache_dir()
+  docker_cli_available = shutil.which('docker') is not None
   try:
     if image_name.lower().startswith('ghcr.io/'):
       logged_in, ghcr_login_error = ensure_ghcr_login()
@@ -440,14 +452,20 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
     error_output_lower = error_output.lower()
 
     if 'image does not exist for the current platform' in error_output_lower:
-      image_exists, existence_message = validate_image_exists_for_platforms(
-        image_name,
-        [],
-      )
-      if not image_exists:
-        log_error(existence_message)
-        return {'error': existence_message}, image_name
-      log_info(existence_message)
+      if docker_cli_available:
+        image_exists, existence_message = validate_image_exists_for_platforms(
+          image_name,
+          [],
+        )
+        if not image_exists:
+          log_error(existence_message)
+          return {'error': existence_message}, image_name
+        log_info(existence_message)
+      else:
+        log_info(
+          'Docker CLI is unavailable; skipping docker manifest validation '
+          'and trying configured platform fallbacks directly.'
+        )
 
       platform_fallbacks = get_platform_fallbacks()
       for platform_name in platform_fallbacks:
@@ -474,14 +492,15 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
         error_output = platform_result.stderr or platform_result.stdout or error_output
         error_output_lower = error_output.lower()
 
-      image_exists, validation_message = validate_image_exists_for_platforms(
-        image_name,
-        platform_fallbacks,
-      )
-      if not image_exists:
-        log_error(validation_message)
-        return {'error': validation_message}, image_name
-      log_info(validation_message)
+      if docker_cli_available:
+        image_exists, validation_message = validate_image_exists_for_platforms(
+          image_name,
+          platform_fallbacks,
+        )
+        if not image_exists:
+          log_error(validation_message)
+          return {'error': validation_message}, image_name
+        log_info(validation_message)
 
     if 'no space left on device' in error_output_lower:
       log_error(
