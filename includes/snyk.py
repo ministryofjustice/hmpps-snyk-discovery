@@ -272,6 +272,7 @@ def ensure_ghcr_login():
 
     docker_path = shutil.which('docker')
     if docker_path:
+      log_info('Using docker login for private/internal GHCR image scanning.')
       login_result = subprocess.run(
         ['docker', 'login', 'ghcr.io', '-u', ghcr_username, '--password-stdin'],
         input=ghcr_password,
@@ -290,8 +291,7 @@ def ensure_ghcr_login():
         return False, f'Failed GHCR docker login: {error_text.strip()}'
     else:
       log_info(
-        'Docker CLI not found. Skipping docker login and relying on '
-        'DOCKER_AUTH_CONFIG for registry auth.'
+        'Scanning private/internal GHCR images using DOCKER_AUTH_CONFIG registry auth.'
       )
 
     ghcr_login_ok = True
@@ -571,6 +571,7 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   docker_cli_available = shutil.which('docker') is not None
   try:
     if image_name.lower().startswith('ghcr.io/'):
+      log_info(f'Scanning private/internal GHCR image: {image_name}')
       logged_in, ghcr_login_error = ensure_ghcr_login()
       if not logged_in:
         log_error(
