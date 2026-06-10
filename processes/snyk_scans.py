@@ -362,7 +362,7 @@ def upsert_vulnerabilities(sc, vulnerabilities):
   }
 
   for vuln in vulnerabilities:
-    log_info('Processing vulnerability: ' + json.dumps(vuln))
+    log_debug('Processing vulnerability: ' + json.dumps(vuln))
     snyk_id = vuln.get('id')
     if not snyk_id:
       continue
@@ -401,7 +401,7 @@ def upsert_vulnerabilities(sc, vulnerabilities):
 
     if not existing_records:
       log_info(f'Adding new vulnerability {snyk_id} to snyk-vulnerabilities collection')
-      log_info(
+      log_debug(
         f'Payload for new vulnerability {snyk_id}: '
         f'{json.dumps(snyk_vulnerability_payload)}'
       )

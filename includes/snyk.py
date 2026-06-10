@@ -49,6 +49,34 @@ def get_thread_cache_dir():
     return snyk_cache_dir
   return os.path.join(snyk_cache_dir, f'thread-{threading.get_ident()}')
 
+def write_docker_config_from_env():
+  ghcr_auth_config = os.getenv('GHCR_AUTH_CONFIG', '').strip()
+  if not ghcr_auth_config:
+    log_debug('GHCR_AUTH_CONFIG is not set; skipping Docker config write.')
+    return
+
+  docker_config_dir = os.getenv('DOCKER_CONFIG', '/home/appuser/.docker').strip()
+  if not docker_config_dir:
+    docker_config_dir = '/home/appuser/.docker'
+
+  docker_config_file = os.path.join(docker_config_dir, 'config.json')
+
+  try:
+    parsed_auth_config = json.loads(ghcr_auth_config)
+  except json.JSONDecodeError as e:
+    log_error(f'Invalid GHCR_AUTH_CONFIG JSON; skipping Docker config write: {e}')
+    return
+
+  try:
+    os.makedirs(docker_config_dir, exist_ok=True)
+    os.chmod(docker_config_dir, 0o700)
+    with open(docker_config_file, 'w', encoding='utf-8') as config_file:
+      json.dump(parsed_auth_config, config_file, indent=2)
+      config_file.write('\n')
+    os.chmod(docker_config_file, 0o600)
+    log_info(f'Wrote Docker auth config to {docker_config_file}')
+  except Exception as e:
+    log_error(f'Failed writing Docker auth config: {e}')
 
 def cleanup_docker_after_scan(image_name):
   if not get_env_bool('SNYK_DOCKER_CLEANUP', default=True):
@@ -165,6 +193,8 @@ def install():
 
   if not os.getenv('SNYK_TOKEN'):
     return 'Failed to install Snyk - SNYK_TOKEN environment variable is missing'
+
+  write_docker_config_from_env()
 
   return 'Success'
 

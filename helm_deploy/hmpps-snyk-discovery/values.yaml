@@ -11,6 +11,7 @@ snykScanCronJob:
   env:
     SNYK_MAX_WORKERS: "4"
     PATH: "/home/appuser/.local:/usr/local/bin:$PATH"
+    DOCKER_CONFIG: "/home/appuser/.docker"
   resources:
     requests:
       cpu: "500m"
