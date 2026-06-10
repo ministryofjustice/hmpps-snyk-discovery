@@ -2,6 +2,7 @@ import requests
 import subprocess
 import os
 import json
+import base64
 import platform
 import shutil
 import threading
@@ -24,6 +25,9 @@ snyk_binary = os.getenv(
   'SNYK_BINARY_PATH',
   os.path.join(default_snyk_root, 'snyk-bin', 'snyk'),
 )
+ghcr_login_attempted = False
+ghcr_login_ok = False
+ghcr_login_lock = threading.Lock()
 
 
 def get_env_bool(name, default=False):
@@ -178,6 +182,95 @@ def get_platform_fallbacks():
   ]
 
 
+def get_ghcr_credentials():
+  auth_config_raw = os.getenv('GHCR_AUTH_CONFIG', '').strip()
+  if not auth_config_raw:
+    return None, None, 'GHCR credentials missing. Set GHCR_AUTH_CONFIG (.dockerconfigjson).'
+
+  try:
+    auth_config = json.loads(auth_config_raw)
+  except json.JSONDecodeError as e:
+    return None, None, f'Invalid GHCR_AUTH_CONFIG JSON: {e}'
+
+  auths = auth_config.get('auths', {}) if isinstance(auth_config, dict) else {}
+  if not isinstance(auths, dict):
+    return None, None, 'Invalid GHCR_AUTH_CONFIG: missing auths object.'
+
+  candidate_hosts = ('ghcr.io', 'https://ghcr.io', 'https://ghcr.io/')
+  ghcr_entry = None
+  for host in candidate_hosts:
+    value = auths.get(host)
+    if isinstance(value, dict):
+      ghcr_entry = value
+      break
+
+  if not ghcr_entry:
+    for host, value in auths.items():
+      if isinstance(host, str) and 'ghcr.io' in host and isinstance(value, dict):
+        ghcr_entry = value
+        break
+
+  if not ghcr_entry:
+    return None, None, 'Invalid GHCR_AUTH_CONFIG: no ghcr.io entry under auths.'
+
+  ghcr_username = str(ghcr_entry.get('username', '')).strip()
+  ghcr_password = str(ghcr_entry.get('password', '')).strip()
+  if ghcr_username and ghcr_password:
+    return ghcr_username, ghcr_password, None
+
+  auth_b64 = str(ghcr_entry.get('auth', '')).strip()
+  if not auth_b64:
+    return None, None, 'Invalid GHCR_AUTH_CONFIG: ghcr.io entry missing credentials.'
+
+  try:
+    decoded_auth = base64.b64decode(auth_b64).decode('utf-8')
+  except Exception as e:
+    return None, None, f'Invalid GHCR_AUTH_CONFIG auth value: {e}'
+
+  if ':' not in decoded_auth:
+    return None, None, 'Invalid GHCR_AUTH_CONFIG auth value: expected username:password.'
+
+  ghcr_username, ghcr_password = decoded_auth.split(':', 1)
+  ghcr_username = ghcr_username.strip()
+  ghcr_password = ghcr_password.strip()
+  if not (ghcr_username and ghcr_password):
+    return None, None, 'Invalid GHCR_AUTH_CONFIG auth value: empty username or password.'
+
+  return ghcr_username, ghcr_password, None
+
+
+def ensure_ghcr_login():
+  global ghcr_login_attempted
+  global ghcr_login_ok
+
+  with ghcr_login_lock:
+    if ghcr_login_attempted:
+      return ghcr_login_ok, None if ghcr_login_ok else 'GHCR login already failed'
+
+    ghcr_username, ghcr_password, credentials_error = get_ghcr_credentials()
+    if credentials_error:
+      ghcr_login_attempted = True
+      ghcr_login_ok = False
+      return False, credentials_error
+
+    login_result = subprocess.run(
+      ['docker', 'login', 'ghcr.io', '-u', ghcr_username, '--password-stdin'],
+      input=ghcr_password,
+      capture_output=True,
+      text=True,
+      check=False,
+    )
+
+    ghcr_login_attempted = True
+    if login_result.returncode != 0:
+      ghcr_login_ok = False
+      error_text = login_result.stderr or login_result.stdout or 'Unknown docker login error'
+      return False, f'Failed GHCR docker login: {error_text.strip()}'
+
+    ghcr_login_ok = True
+    return True, None
+
+
 def run_snyk_subprocess(command, cache_dir=None):
   target_cache_dir = cache_dir or get_thread_cache_dir()
   os.makedirs(target_cache_dir, exist_ok=True)
@@ -189,6 +282,84 @@ def run_snyk_subprocess(command, cache_dir=None):
     text=True,
     check=False,
     env=process_env,
+  )
+
+
+def inspect_image_manifest(image_name):
+  inspect_result = subprocess.run(
+    ['docker', 'manifest', 'inspect', image_name],
+    capture_output=True,
+    text=True,
+    check=False,
+  )
+
+  if inspect_result.returncode != 0:
+    error_text = inspect_result.stderr or inspect_result.stdout or 'Unknown error'
+    return None, error_text.strip()
+
+  try:
+    return json.loads(inspect_result.stdout), None
+  except json.JSONDecodeError as e:
+    return None, f'Failed to parse image manifest for {image_name}: {e}'
+
+
+def _matches_platform(manifest_platform, expected_platform):
+  if not isinstance(manifest_platform, dict):
+    return False
+
+  expected_os, expected_arch, expected_variant = expected_platform
+  manifest_os = str(manifest_platform.get('os', '')).lower()
+  manifest_arch = str(manifest_platform.get('architecture', '')).lower()
+  manifest_variant = str(manifest_platform.get('variant', '')).lower()
+
+  if manifest_os != expected_os or manifest_arch != expected_arch:
+    return False
+
+  if expected_variant and manifest_variant != expected_variant:
+    return False
+
+  return True
+
+
+def validate_image_exists_for_platforms(image_name, platforms):
+  manifest_json, manifest_error = inspect_image_manifest(image_name)
+  if manifest_json is None:
+    return (
+      False,
+      f'Image validation failed for {image_name}: manifest lookup failed: '
+      f'{manifest_error}',
+    )
+
+  manifests = manifest_json.get('manifests') if isinstance(manifest_json, dict) else None
+  if not isinstance(manifests, list):
+    return True, f'Image validation passed for {image_name}: manifest exists.'
+
+  normalized_platforms = []
+  for platform_name in platforms:
+    parts = platform_name.lower().split('/', 2)
+    if len(parts) < 2:
+      continue
+    expected_os = parts[0]
+    expected_arch = parts[1]
+    expected_variant = parts[2] if len(parts) > 2 else ''
+    normalized_platforms.append((expected_os, expected_arch, expected_variant))
+
+  if not normalized_platforms:
+    return True, f'Image validation passed for {image_name}: manifest exists.'
+
+  for manifest in manifests:
+    platform_data = manifest.get('platform', {})
+    if any(
+      _matches_platform(platform_data, expected)
+      for expected in normalized_platforms
+    ):
+      return True, f'Image validation passed for {image_name}: platform manifest exists.'
+
+  platform_list = ', '.join(platforms)
+  return (
+    False,
+    f'Image validation failed for {image_name}: image exists but no manifest '
+    f'for configured fallback platform(s): {platform_list}',
   )
 
 
@@ -221,6 +392,12 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
+    if image_name.lower().startswith('ghcr.io/'):
+      logged_in, ghcr_login_error = ensure_ghcr_login()
+      if not logged_in:
+        log_error(f'Unable to authenticate to GHCR for {image_name}: {ghcr_login_error}')
+        return {'error': ghcr_login_error}, image_name
+
     result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
      # Snyk exits with code 1 when vulnerabilities are found, which is expected.
     if result.returncode in (0, 1):
@@ -238,7 +415,17 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
     error_output_lower = error_output.lower()
 
     if 'image does not exist for the current platform' in error_output_lower:
-      for platform_name in get_platform_fallbacks():
+      image_exists, existence_message = validate_image_exists_for_platforms(
+        image_name,
+        [],
+      )
+      if not image_exists:
+        log_error(existence_message)
+        return {'error': existence_message}, image_name
+      log_info(existence_message)
+
+      platform_fallbacks = get_platform_fallbacks()
+      for platform_name in platform_fallbacks:
         platform_command = command + [f'--platform={platform_name}']
         log_info(
           f'Image not available on current platform. Retrying {image_name} '
@@ -261,6 +448,15 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
 
         error_output = platform_result.stderr or platform_result.stdout or error_output
         error_output_lower = error_output.lower()
+
+      image_exists, validation_message = validate_image_exists_for_platforms(
+        image_name,
+        platform_fallbacks,
+      )
+      if not image_exists:
+        log_error(validation_message)
+        return {'error': validation_message}, image_name
+      log_info(validation_message)
 
     if 'no space left on device' in error_output_lower:
       log_error(

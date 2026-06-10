@@ -78,7 +78,18 @@ def main():
   snyk.scan_hmpps_base_container_images(sc=sc)
   snyk_scans.update_scan_cve_details(sc=sc)
   snyk_scans.send_summary_to_slack(sc=sc, slack=slack)
-  if job.error_messages:
+
+  log_info('Snyk discovery job completed, processing results...')
+  log_info(f'Before filtering, Error messages: {job.error_messages}')
+  ignored_error = "Error adding a record to snyk-vulnerabilities in service catalogue: 'name'"
+  filtered_messages = [
+    message for message in job.error_messages if message != ignored_error
+  ]
+  deduplicated_messages = list(dict.fromkeys(filtered_messages))
+  log_info(f'After filtering and deduplication, Error messages: {deduplicated_messages}')
+  job.error_messages = deduplicated_messages
+
+  if deduplicated_messages:
     sc.update_scheduled_job('Errors')
     log_info('Snyk discovery job completed  with errors.')
   else:
