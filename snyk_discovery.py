@@ -81,12 +81,16 @@ def main():
 
   log_info('Snyk discovery job completed, processing results...')
   log_info(f'Before filtering, Error messages: {job.error_messages}')
-  ignored_error = "Error adding a record to snyk-vulnerabilities in service catalogue: 'name'"
+  ignored_error = (
+    "Error adding a record to snyk-vulnerabilities in service catalogue: 'name'"
+  )
   filtered_messages = [
     message for message in job.error_messages if message != ignored_error
   ]
   deduplicated_messages = list(dict.fromkeys(filtered_messages))
-  log_info(f'After filtering and deduplication, Error messages: {deduplicated_messages}')
+  log_info(
+    f'After filtering and deduplication, Error messages: {deduplicated_messages}'
+  )
   job.error_messages = deduplicated_messages
 
   if deduplicated_messages:

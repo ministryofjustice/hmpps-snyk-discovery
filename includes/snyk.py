@@ -185,7 +185,11 @@ def get_platform_fallbacks():
 def get_ghcr_credentials():
   auth_config_raw = os.getenv('GHCR_AUTH_CONFIG', '').strip()
   if not auth_config_raw:
-    return None, None, 'GHCR credentials missing. Set GHCR_AUTH_CONFIG (.dockerconfigjson).'
+    return (
+      None,
+      None,
+      'GHCR credentials missing. Set GHCR_AUTH_CONFIG (.dockerconfigjson).',
+    )
 
   try:
     auth_config = json.loads(auth_config_raw)
@@ -228,13 +232,21 @@ def get_ghcr_credentials():
     return None, None, f'Invalid GHCR_AUTH_CONFIG auth value: {e}'
 
   if ':' not in decoded_auth:
-    return None, None, 'Invalid GHCR_AUTH_CONFIG auth value: expected username:password.'
+    return (
+      None,
+      None,
+      'Invalid GHCR_AUTH_CONFIG auth value: expected username:password.',
+    )
 
   ghcr_username, ghcr_password = decoded_auth.split(':', 1)
   ghcr_username = ghcr_username.strip()
   ghcr_password = ghcr_password.strip()
   if not (ghcr_username and ghcr_password):
-    return None, None, 'Invalid GHCR_AUTH_CONFIG auth value: empty username or password.'
+    return (
+      None,
+      None,
+      'Invalid GHCR_AUTH_CONFIG auth value: empty username or password.',
+    )
 
   return ghcr_username, ghcr_password, None
 
@@ -264,7 +276,11 @@ def ensure_ghcr_login():
     ghcr_login_attempted = True
     if login_result.returncode != 0:
       ghcr_login_ok = False
-      error_text = login_result.stderr or login_result.stdout or 'Unknown docker login error'
+      error_text = (
+        login_result.stderr
+        or login_result.stdout
+        or 'Unknown docker login error'
+      )
       return False, f'Failed GHCR docker login: {error_text.strip()}'
 
     ghcr_login_ok = True
@@ -330,7 +346,11 @@ def validate_image_exists_for_platforms(image_name, platforms):
       f'{manifest_error}',
     )
 
-  manifests = manifest_json.get('manifests') if isinstance(manifest_json, dict) else None
+  manifests = (
+    manifest_json.get('manifests')
+    if isinstance(manifest_json, dict)
+    else None
+  )
   if not isinstance(manifests, list):
     return True, f'Image validation passed for {image_name}: manifest exists.'
 
@@ -353,7 +373,10 @@ def validate_image_exists_for_platforms(image_name, platforms):
       _matches_platform(platform_data, expected)
       for expected in normalized_platforms
     ):
-      return True, f'Image validation passed for {image_name}: platform manifest exists.'
+      return (
+        True,
+        f'Image validation passed for {image_name}: platform manifest exists.',
+      )
 
   platform_list = ', '.join(platforms)
   return (
@@ -395,7 +418,9 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
     if image_name.lower().startswith('ghcr.io/'):
       logged_in, ghcr_login_error = ensure_ghcr_login()
       if not logged_in:
-        log_error(f'Unable to authenticate to GHCR for {image_name}: {ghcr_login_error}')
+        log_error(
+          f'Unable to authenticate to GHCR for {image_name}: {ghcr_login_error}'
+        )
         return {'error': ghcr_login_error}, image_name
 
     result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
