@@ -397,6 +397,149 @@ def validate_image_exists_for_platforms(image_name, platforms):
   )
 
 
+def parse_image_reference(image_name):
+  if '@' in image_name:
+    repo_part, ref = image_name.rsplit('@', 1)
+  else:
+    repo_part = image_name
+    last_slash = repo_part.rfind('/')
+    last_colon = repo_part.rfind(':')
+    if last_colon > last_slash:
+      repo_part, ref = repo_part[:last_colon], repo_part[last_colon + 1 :]
+    else:
+      ref = 'latest'
+
+  if not repo_part.startswith('ghcr.io/'):
+    return None, None, f'Unsupported registry for API validation: {image_name}'
+
+  repo_path = repo_part[len('ghcr.io/'):]
+  if not repo_path or not ref:
+    return None, None, f'Invalid image reference: {image_name}'
+
+  return repo_path, ref, None
+
+
+def fetch_ghcr_manifest(image_name):
+  repo_path, ref, ref_error = parse_image_reference(image_name)
+  if ref_error:
+    return None, ref_error
+
+  ghcr_username, ghcr_password, credentials_error = get_ghcr_credentials()
+  if credentials_error:
+    return None, credentials_error
+
+  token_url = 'https://ghcr.io/token'
+  token_params = {
+    'scope': f'repository:{repo_path}:pull',
+    'service': 'ghcr.io',
+  }
+  token = None
+  try:
+    token_response = requests.get(
+      token_url,
+      params=token_params,
+      auth=(ghcr_username, ghcr_password),
+      timeout=20,
+    )
+    if token_response.status_code == 200:
+      token = (token_response.json() or {}).get('token')
+  except requests.RequestException as e:
+    log_debug(f'GHCR token request failed for {image_name}: {e}')
+
+  manifest_url = f'https://ghcr.io/v2/{repo_path}/manifests/{ref}'
+  headers = {
+    'Accept': (
+      'application/vnd.oci.image.index.v1+json, '
+      'application/vnd.docker.distribution.manifest.list.v2+json, '
+      'application/vnd.oci.image.manifest.v1+json, '
+      'application/vnd.docker.distribution.manifest.v2+json'
+    )
+  }
+  if token:
+    headers['Authorization'] = f'Bearer {token}'
+
+  try:
+    manifest_response = requests.get(
+      manifest_url,
+      headers=headers,
+      auth=None if token else (ghcr_username, ghcr_password),
+      timeout=20,
+    )
+  except requests.RequestException as e:
+    return None, f'GHCR manifest request failed for {image_name}: {e}'
+
+  if manifest_response.status_code == 404:
+    return (
+      None,
+      f'Image validation failed for {image_name}: image/tag not found in GHCR.',
+    )
+
+  if manifest_response.status_code in (401, 403):
+    return (
+      None,
+      f'Image validation failed for {image_name}: '
+      f'unauthorized to access GHCR manifest.',
+    )
+
+  if manifest_response.status_code != 200:
+    response_text = manifest_response.text.strip()[:300]
+    return (
+      None,
+      f'Image validation failed for {image_name}: GHCR returned '
+      f'{manifest_response.status_code}: {response_text}',
+    )
+
+  try:
+    return manifest_response.json(), None
+  except json.JSONDecodeError as e:
+    return None, f'Image validation failed for {image_name}: invalid manifest JSON: {e}'
+
+
+def validate_image_exists_for_platforms_via_registry(image_name, platforms):
+  manifest_json, manifest_error = fetch_ghcr_manifest(image_name)
+  if manifest_json is None:
+    return False, manifest_error
+
+  manifests = (
+    manifest_json.get('manifests')
+    if isinstance(manifest_json, dict)
+    else None
+  )
+  if not isinstance(manifests, list):
+    return True, f'Image validation passed for {image_name}: manifest exists.'
+
+  normalized_platforms = []
+  for platform_name in platforms:
+    parts = platform_name.lower().split('/', 2)
+    if len(parts) < 2:
+      continue
+    expected_os = parts[0]
+    expected_arch = parts[1]
+    expected_variant = parts[2] if len(parts) > 2 else ''
+    normalized_platforms.append((expected_os, expected_arch, expected_variant))
+
+  if not normalized_platforms:
+    return True, f'Image validation passed for {image_name}: manifest exists.'
+
+  for manifest in manifests:
+    platform_data = manifest.get('platform', {})
+    if any(
+      _matches_platform(platform_data, expected)
+      for expected in normalized_platforms
+    ):
+      return (
+        True,
+        f'Image validation passed for {image_name}: platform manifest exists.',
+      )
+
+  platform_list = ', '.join(platforms)
+  return (
+    False,
+    f'Image validation failed for {image_name}: image exists but no manifest '
+    f'for configured fallback platform(s): {platform_list}',
+  )
+
+
 def parse_snyk_json_output(output_text):
   if not output_text:
     raise ValueError('Snyk scan produced no JSON output')
@@ -462,10 +605,16 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
           return {'error': existence_message}, image_name
         log_info(existence_message)
       else:
-        log_info(
-          'Docker CLI is unavailable; skipping docker manifest validation '
-          'and trying configured platform fallbacks directly.'
+        image_exists, existence_message = (
+          validate_image_exists_for_platforms_via_registry(
+            image_name,
+            [],
+          )
         )
+        if not image_exists:
+          log_error(existence_message)
+          return {'error': existence_message}, image_name
+        log_info(existence_message)
 
       platform_fallbacks = get_platform_fallbacks()
       for platform_name in platform_fallbacks:
@@ -496,6 +645,17 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
         image_exists, validation_message = validate_image_exists_for_platforms(
           image_name,
           platform_fallbacks,
+        )
+        if not image_exists:
+          log_error(validation_message)
+          return {'error': validation_message}, image_name
+        log_info(validation_message)
+      else:
+        image_exists, validation_message = (
+          validate_image_exists_for_platforms_via_registry(
+            image_name,
+            platform_fallbacks,
+          )
         )
         if not image_exists:
           log_error(validation_message)
