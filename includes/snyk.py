@@ -71,7 +71,7 @@ def write_docker_config_from_env():
   if isinstance(auths, dict):
     transformed_auths = {}
     for registry, registry_config in auths.items():
-      transformed_registry = str(registry).replace('https://ghcr.io', 'ghcr.lo')
+      transformed_registry = str(registry).replace('https://ghcr.io', 'ghcr.io')
       if isinstance(registry_config, dict):
         transformed_auths[transformed_registry] = {
           'auth': registry_config.get('auth', ''),
