@@ -22,7 +22,8 @@ spec:
           containers:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
-              command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-f"]
+              # command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-f"]
+              command: ["sleep", "36000"] # For debug purposes, to keep the container alive. Replace with actual command when ready to run full scan.
               resources:
                 {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
