@@ -49,45 +49,6 @@ def get_thread_cache_dir():
     return snyk_cache_dir
   return os.path.join(snyk_cache_dir, f'thread-{threading.get_ident()}')
 
-def write_docker_config_from_env():
-  ghcr_auth_config = os.getenv('GHCR_AUTH_CONFIG')
-  if ghcr_auth_config is None:
-    log_debug('GHCR_AUTH_CONFIG is not set; skipping Docker config write.')
-    return
-
-  docker_config_dir = os.getenv('DOCKER_CONFIG', '/home/appuser/.docker').strip()
-  if not docker_config_dir:
-    docker_config_dir = '/home/appuser/.docker'
-
-  docker_config_file = os.path.join(docker_config_dir, 'config.json')
-
-  try:
-    os.makedirs(docker_config_dir, exist_ok=True)
-    os.chmod(docker_config_dir, 0o700)
-    with open(docker_config_file, 'w', encoding='utf-8') as config_file:
-      config_file.write(ghcr_auth_config)
-    os.chmod(docker_config_file, 0o600)
-    # Ensure subprocesses always use the same config path we just wrote.
-    os.environ['DOCKER_CONFIG'] = docker_config_dir
-    docker_dir_mode = oct(os.stat(docker_config_dir).st_mode & 0o777)
-    docker_file_mode = oct(os.stat(docker_config_file).st_mode & 0o777)
-    log_info(f'Wrote Docker auth config to {docker_config_file}')
-    log_info(f'Runtime HOME: {os.getenv("HOME", "<unset>")}')
-    log_info(f'Runtime DOCKER_CONFIG: {os.getenv("DOCKER_CONFIG", "<unset>")}')
-    log_info(f'DOCKER_CONFIG dir permissions: {docker_config_dir} {docker_dir_mode}')
-    log_info(f'Docker config.json permissions: {docker_config_file} {docker_file_mode}')
-
-    for file_name in sorted(os.listdir(docker_config_dir)):
-      file_path = os.path.join(docker_config_dir, file_name)
-      file_mode = oct(os.stat(file_path).st_mode & 0o777)
-      log_info(f'DOCKER_CONFIG file permissions: {file_path} {file_mode}')
-
-    with open(docker_config_file, 'r', encoding='utf-8') as config_file:
-      config_contents = config_file.read()
-    log_info(f'Docker config.json contents: {config_contents}')
-  except Exception as e:
-    log_error(f'Failed writing Docker auth config: {e}')
-
 def cleanup_docker_after_scan(image_name):
   if not get_env_bool('SNYK_DOCKER_CLEANUP', default=True):
     return
@@ -203,8 +164,6 @@ def install():
 
   if not os.getenv('SNYK_TOKEN'):
     return 'Failed to install Snyk - SNYK_TOKEN environment variable is missing'
-
-  write_docker_config_from_env()
 
   return 'Success'
 

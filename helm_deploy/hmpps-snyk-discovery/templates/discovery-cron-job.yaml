@@ -1,4 +1,7 @@
 {{- if .Values.snykScanCronJob.enabled -}}
+{{- $namespaceSecrets := .Values.snykScanCronJob.namespace_secrets | default dict -}}
+{{- $ghcrSecret := index $namespaceSecrets "ghcr-pull-secret" | default dict -}}
+{{- $ghcrSecretKey := index $ghcrSecret "GHCR_AUTH_CONFIG" | default ".dockerconfigjson" -}}
 
 ---
 apiVersion: batch/v1
@@ -19,6 +22,30 @@ spec:
       ttlSecondsAfterFinished: 345600
       template:
         spec:
+          initContainers:
+            - name: docker-config-init
+              image: alpine:3.20
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  cp /docker-config-secret/config.json /docker-config/config.json
+                  chown appuser:appgroup /docker-config
+                  chown appuser:appgroup /docker-config/config.json
+                  chmod 700 /docker-config
+                  chmod 600 /docker-config/config.json
+              securityContext:
+                runAsUser: 0
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: docker-config-secret
+                  mountPath: /docker-config-secret
+                  readOnly: true
+                - name: docker-config
+                  mountPath: /docker-config
           containers:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
@@ -33,7 +60,20 @@ spec:
                 allowPrivilegeEscalation: false
                 seccompProfile:
                   type: RuntimeDefault
+              volumeMounts:
+                - name: docker-config
+                  mountPath: /home/appuser/.docker
+                  readOnly: true
       {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
+          volumes:
+            - name: docker-config
+              emptyDir: {}
+            - name: docker-config-secret
+              secret:
+                secretName: ghcr-pull-secret
+                items:
+                  - key: {{ trimSuffix "?" $ghcrSecretKey }}
+                    path: config.json
           restartPolicy: Never
 
 ---
@@ -55,6 +95,30 @@ spec:
       ttlSecondsAfterFinished: 345600
       template:
         spec:
+          initContainers:
+            - name: docker-config-init
+              image: alpine:3.20
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  cp /docker-config-secret/config.json /docker-config/config.json
+                  chown appuser:appgroup /docker-config
+                  chown appuser:appgroup /docker-config/config.json
+                  chmod 700 /docker-config
+                  chmod 600 /docker-config/config.json
+              securityContext:
+                runAsUser: 0
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: docker-config-secret
+                  mountPath: /docker-config-secret
+                  readOnly: true
+                - name: docker-config
+                  mountPath: /docker-config
           containers:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
@@ -69,6 +133,19 @@ spec:
                 allowPrivilegeEscalation: false
                 seccompProfile:
                   type: RuntimeDefault
+              volumeMounts:
+                - name: docker-config
+                  mountPath: /home/appuser/.docker
+                  readOnly: true
       {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
+          volumes:
+            - name: docker-config
+              emptyDir: {}
+            - name: docker-config-secret
+              secret:
+                secretName: ghcr-pull-secret
+                items:
+                  - key: {{ trimSuffix "?" $ghcrSecretKey }}
+                    path: config.json
           restartPolicy: Never
 {{- end }}
