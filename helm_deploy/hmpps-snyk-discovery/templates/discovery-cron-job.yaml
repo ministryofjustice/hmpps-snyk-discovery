@@ -33,8 +33,6 @@ spec:
                 - -ec
                 - |
                   cp /docker-config-secret/config.json /docker-config/config.json
-                  chown 2000:2000 /docker-config
-                  chown 2000:2000 /docker-config/config.json
                   chmod 700 /docker-config
                   chmod 600 /docker-config/config.json
               securityContext:
@@ -113,8 +111,6 @@ spec:
                 - -ec
                 - |
                   cp /docker-config-secret/config.json /docker-config/config.json
-                  chown 2000:2000 /docker-config
-                  chown 2000:2000 /docker-config/config.json
                   chmod 700 /docker-config
                   chmod 600 /docker-config/config.json
               securityContext:
