@@ -67,9 +67,13 @@ def write_docker_config_from_env():
     with open(docker_config_file, 'w', encoding='utf-8') as config_file:
       config_file.write(ghcr_auth_config)
     os.chmod(docker_config_file, 0o600)
+    # Ensure subprocesses always use the same config path we just wrote.
+    os.environ['DOCKER_CONFIG'] = docker_config_dir
     docker_dir_mode = oct(os.stat(docker_config_dir).st_mode & 0o777)
     docker_file_mode = oct(os.stat(docker_config_file).st_mode & 0o777)
     log_info(f'Wrote Docker auth config to {docker_config_file}')
+    log_info(f'Runtime HOME: {os.getenv("HOME", "<unset>")}')
+    log_info(f'Runtime DOCKER_CONFIG: {os.getenv("DOCKER_CONFIG", "<unset>")}')
     log_info(f'DOCKER_CONFIG dir permissions: {docker_config_dir} {docker_dir_mode}')
     log_info(f'Docker config.json permissions: {docker_config_file} {docker_file_mode}')
 
