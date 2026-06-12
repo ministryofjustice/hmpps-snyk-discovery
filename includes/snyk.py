@@ -62,35 +62,13 @@ def write_docker_config_from_env():
   docker_config_file = os.path.join(docker_config_dir, 'config.json')
 
   try:
-    parsed_auth_config = json.loads(ghcr_auth_config)
-  except json.JSONDecodeError as e:
-    log_error(f'Invalid GHCR_AUTH_CONFIG JSON; skipping Docker config write: {e}')
-    return
-
-  auths = parsed_auth_config.get('auths')
-  if isinstance(auths, dict):
-    transformed_auths = {}
-    for registry, registry_config in auths.items():
-      transformed_registry = str(registry).replace('https://ghcr.io', 'ghcr.io')
-      if isinstance(registry_config, dict):
-        transformed_auths[transformed_registry] = {
-          'auth': registry_config.get('auth', ''),
-        }
-      else:
-        transformed_auths[transformed_registry] = {'auth': ''}
-    parsed_auth_config['auths'] = transformed_auths
-
-  try:
     os.makedirs(docker_config_dir, exist_ok=True)
     os.chmod(docker_config_dir, 0o700)
     with open(docker_config_file, 'w', encoding='utf-8') as config_file:
-      json.dump(parsed_auth_config, config_file, indent=2)
+      config_file.write(ghcr_auth_config)
       config_file.write('\n')
     os.chmod(docker_config_file, 0o600)
     log_info(f'Wrote Docker auth config to {docker_config_file}')
-    with open(docker_config_file, 'r', encoding='utf-8') as config_file:
-      file_contents = config_file.read().strip()
-    log_info('Docker auth config file contents: ' + file_contents)
   except Exception as e:
     log_error(f'Failed writing Docker auth config: {e}')
 
