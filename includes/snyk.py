@@ -49,6 +49,7 @@ def get_thread_cache_dir():
     return snyk_cache_dir
   return os.path.join(snyk_cache_dir, f'thread-{threading.get_ident()}')
 
+
 def cleanup_docker_after_scan(image_name):
   if not get_env_bool('SNYK_DOCKER_CLEANUP', default=True):
     return
@@ -217,7 +218,7 @@ def parse_snyk_json_output(output_text):
 
 def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
   log_info(f'Running Snyk scan on {image_name}')
-  command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']  
+  command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
     result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
@@ -514,4 +515,3 @@ def scan_hmpps_base_container_images(sc):
     finally:
       cleanup_docker_after_scan(image_name)
       cleanup_snyk_cache_after_scan(image_name)
-      

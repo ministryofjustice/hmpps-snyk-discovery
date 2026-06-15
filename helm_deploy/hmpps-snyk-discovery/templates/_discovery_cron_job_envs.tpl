@@ -9,8 +9,7 @@ env:
       secretKeyRef:
         key: {{ trimSuffix "?" $val }}
         name: {{ $secret }}{{ if hasSuffix "?" $val }}
-        optional: true{{ end }}
-  {{- end }}
+        optional: true{{ end }}  {{- end }}
 {{- end }}
 {{- end }}
 {{- if .snykScanCronJob.env -}}

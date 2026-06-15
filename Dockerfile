@@ -11,4 +11,4 @@ COPY --chown=appuser:appgroup  ./snyk_discovery.py /app/snyk_discovery.py
 COPY --chown=appuser:appgroup  ./includes ./includes
 COPY --chown=appuser:appgroup  ./processes ./processes
 
-CMD ["uv", "run", "python", "-u", "/app/snyk_discovery.py"]
+CMD [ "uv", "run", "python", "-u", "/app/snyk_discovery.py" ]
