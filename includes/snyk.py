@@ -49,6 +49,38 @@ def get_thread_cache_dir():
     return snyk_cache_dir
   return os.path.join(snyk_cache_dir, f'thread-{threading.get_ident()}')
 
+
+def log_docker_config_details():
+  docker_config_dir = os.getenv('DOCKER_CONFIG', '/app/.docker').strip()
+  docker_config_file = os.path.join(docker_config_dir, 'config.json')
+
+  log_info(f'Runtime HOME: {os.getenv("HOME", "<unset>")}')
+  log_info(f'Runtime DOCKER_CONFIG: {docker_config_dir}')
+
+  if not os.path.isdir(docker_config_dir):
+    log_error(f'DOCKER_CONFIG directory not found: {docker_config_dir}')
+    return
+
+  docker_dir_mode = oct(os.stat(docker_config_dir).st_mode & 0o777)
+  log_info(f'DOCKER_CONFIG dir permissions: {docker_config_dir} {docker_dir_mode}')
+
+  for file_name in sorted(os.listdir(docker_config_dir)):
+    file_path = os.path.join(docker_config_dir, file_name)
+    file_mode = oct(os.stat(file_path).st_mode & 0o777)
+    log_info(f'DOCKER_CONFIG file permissions: {file_path} {file_mode}')
+
+  if not os.path.isfile(docker_config_file):
+    log_error(f'Docker config file not found: {docker_config_file}')
+    return
+
+  docker_file_mode = oct(os.stat(docker_config_file).st_mode & 0o777)
+  log_info(f'Docker config.json permissions: {docker_config_file} {docker_file_mode}')
+
+  with open(docker_config_file, 'r', encoding='utf-8') as config_file:
+    config_contents = config_file.read()
+  log_info(f'Docker config.json contents: {config_contents}')
+
+
 def cleanup_docker_after_scan(image_name):
   if not get_env_bool('SNYK_DOCKER_CLEANUP', default=True):
     return
@@ -164,6 +196,11 @@ def install():
 
   if not os.getenv('SNYK_TOKEN'):
     return 'Failed to install Snyk - SNYK_TOKEN environment variable is missing'
+
+  try:
+    log_docker_config_details()
+  except Exception as e:
+    log_error(f'Failed logging Docker config details: {e}')
 
   return 'Success'
 
