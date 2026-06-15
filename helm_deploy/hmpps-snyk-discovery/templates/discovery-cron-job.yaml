@@ -27,7 +27,6 @@ spec:
                 - |
                   if [ -n "${GHCR_AUTH_CONFIG:-}" ]; then
                     printf '%s' "$GHCR_AUTH_CONFIG" > "$DOCKER_CONFIG/config.json"
-                    chmod 600 "$DOCKER_CONFIG/config.json"
                   fi
                   exec uv run python -u /app/snyk_discovery.py -f
               resources:
@@ -71,7 +70,6 @@ spec:
                 - |
                   if [ -n "${GHCR_AUTH_CONFIG:-}" ]; then
                     printf '%s' "$GHCR_AUTH_CONFIG" > "$DOCKER_CONFIG/config.json"
-                    chmod 600 "$DOCKER_CONFIG/config.json"
                   fi
                   exec uv run python -u /app/snyk_discovery.py -i
               resources:
