@@ -12,6 +12,10 @@ updates:
     directory: "/helm_deploy/hmpps-snyk-discovery"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-patch"
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
