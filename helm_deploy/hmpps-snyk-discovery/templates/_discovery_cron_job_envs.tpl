@@ -4,14 +4,12 @@ env:
 {{- if .snykScanCronJob.namespace_secrets -}}
 {{- range $secret, $envs := .snykScanCronJob.namespace_secrets }}
   {{- range $key, $val := $envs }}
-  {{- if ne $key "GHCR_AUTH_CONFIG" }}
   - name: {{ $key }}
     valueFrom:
       secretKeyRef:
         key: {{ trimSuffix "?" $val }}
         name: {{ $secret }}{{ if hasSuffix "?" $val }}
         optional: true{{ end }}
-  {{- end }}
   {{- end }}
 {{- end }}
 {{- end }}

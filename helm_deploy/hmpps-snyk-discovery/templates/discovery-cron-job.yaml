@@ -1,8 +1,4 @@
 {{- if .Values.snykScanCronJob.enabled -}}
-{{- $namespaceSecrets := .Values.snykScanCronJob.namespace_secrets | default dict -}}
-{{- $ghcrSecret := index $namespaceSecrets "ghcr-pull-secret" | default dict -}}
-{{- $ghcrSecretKey := index $ghcrSecret "GHCR_AUTH_CONFIG" | default ".dockerconfigjson" -}}
-
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -22,39 +18,18 @@ spec:
       ttlSecondsAfterFinished: 345600
       template:
         spec:
-          securityContext:
-            runAsNonRoot: true
-            fsGroup: 2000
-          initContainers:
-            - name: docker-config-init
-              image: alpine:3.20
+          containers:
+            - name: hmpps-snyk-discovery
+              image: "{{ .Values.image.repository }}:{{ .Values.version }}"
               command:
                 - /bin/sh
                 - -ec
                 - |
-                  cp /docker-config-secret/config.json /docker-config/config.json
-                  chmod 700 /docker-config
-                  chmod 600 /docker-config/config.json
-              securityContext:
-                runAsNonRoot: true
-                runAsUser: 2000
-                runAsGroup: 2000
-                allowPrivilegeEscalation: false
-                seccompProfile:
-                  type: RuntimeDefault
-                capabilities:
-                  drop:
-                    - ALL
-              volumeMounts:
-                - name: docker-config-secret
-                  mountPath: /docker-config-secret
-                  readOnly: true
-                - name: docker-config
-                  mountPath: /docker-config
-          containers:
-            - name: hmpps-snyk-discovery
-              image: "{{ .Values.image.repository }}:{{ .Values.version }}"
-              command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-f"]
+                  if [ -n "${GHCR_AUTH_CONFIG:-}" ]; then
+                    printf '%s' "$GHCR_AUTH_CONFIG" > "$DOCKER_CONFIG/config.json"
+                    chmod 600 "$DOCKER_CONFIG/config.json"
+                  fi
+                  exec uv run python -u /app/snyk_discovery.py -f
               resources:
                 {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
@@ -65,20 +40,7 @@ spec:
                 allowPrivilegeEscalation: false
                 seccompProfile:
                   type: RuntimeDefault
-              volumeMounts:
-                - name: docker-config
-                  mountPath: /home/appuser/.docker
-                  readOnly: true
       {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
-          volumes:
-            - name: docker-config
-              emptyDir: {}
-            - name: docker-config-secret
-              secret:
-                secretName: ghcr-pull-secret
-                items:
-                  - key: {{ trimSuffix "?" $ghcrSecretKey }}
-                    path: config.json
           restartPolicy: Never
 
 ---
@@ -100,39 +62,18 @@ spec:
       ttlSecondsAfterFinished: 345600
       template:
         spec:
-          securityContext:
-            runAsNonRoot: true
-            fsGroup: 2000
-          initContainers:
-            - name: docker-config-init
-              image: alpine:3.20
+          containers:
+            - name: hmpps-snyk-discovery
+              image: "{{ .Values.image.repository }}:{{ .Values.version }}"
               command:
                 - /bin/sh
                 - -ec
                 - |
-                  cp /docker-config-secret/config.json /docker-config/config.json
-                  chmod 700 /docker-config
-                  chmod 600 /docker-config/config.json
-              securityContext:
-                runAsNonRoot: true
-                runAsUser: 2000
-                runAsGroup: 2000
-                allowPrivilegeEscalation: false
-                seccompProfile:
-                  type: RuntimeDefault
-                capabilities:
-                  drop:
-                    - ALL
-              volumeMounts:
-                - name: docker-config-secret
-                  mountPath: /docker-config-secret
-                  readOnly: true
-                - name: docker-config
-                  mountPath: /docker-config
-          containers:
-            - name: hmpps-snyk-discovery
-              image: "{{ .Values.image.repository }}:{{ .Values.version }}"
-              command: ["uv", "run", "python", "-u", "/app/snyk_discovery.py", "-i"]
+                  if [ -n "${GHCR_AUTH_CONFIG:-}" ]; then
+                    printf '%s' "$GHCR_AUTH_CONFIG" > "$DOCKER_CONFIG/config.json"
+                    chmod 600 "$DOCKER_CONFIG/config.json"
+                  fi
+                  exec uv run python -u /app/snyk_discovery.py -i
               resources:
                 {{- toYaml .Values.snykScanCronJob.resources | nindent 16 }}
               securityContext:
@@ -143,19 +84,6 @@ spec:
                 allowPrivilegeEscalation: false
                 seccompProfile:
                   type: RuntimeDefault
-              volumeMounts:
-                - name: docker-config
-                  mountPath: /home/appuser/.docker
-                  readOnly: true
       {{- include "snykScanCronJob.envs" .Values | nindent 14 }}
-          volumes:
-            - name: docker-config
-              emptyDir: {}
-            - name: docker-config-secret
-              secret:
-                secretName: ghcr-pull-secret
-                items:
-                  - key: {{ trimSuffix "?" $ghcrSecretKey }}
-                    path: config.json
           restartPolicy: Never
 {{- end }}
