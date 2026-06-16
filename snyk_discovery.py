@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+import base64
+import binascii
+import json
 import os
 import sys
 from urllib.parse import urlparse
@@ -36,6 +39,50 @@ def _normalise_service_catalogue_endpoint_for_local_testing():
     )
 
 
+def _set_snyk_registry_credentials_from_ghcr_auth_config():
+  raw_config = os.getenv('GHCR_AUTH_CONFIG', '').strip()
+  if not raw_config:
+    return
+
+  config_data = None
+  try:
+    config_data = json.loads(raw_config)
+  except json.JSONDecodeError:
+    try:
+      decoded = base64.b64decode(raw_config).decode('utf-8')
+      config_data = json.loads(decoded)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+      log_warning('GHCR_AUTH_CONFIG is not valid JSON; skipping registry env setup.')
+      return
+
+  auths = config_data.get('auths', {}) if isinstance(config_data, dict) else {}
+  ghcr_auth_entry = (
+    auths.get('ghcr.io')
+    or auths.get('https://ghcr.io')
+    or auths.get('https://ghcr.io/v1/')
+  )
+  if not isinstance(ghcr_auth_entry, dict):
+    return
+
+  username = ghcr_auth_entry.get('username')
+  password = ghcr_auth_entry.get('password')
+
+  if not username or not password:
+    auth_value = ghcr_auth_entry.get('auth')
+    if not auth_value:
+      return
+    try:
+      decoded_auth = base64.b64decode(auth_value).decode('utf-8')
+      username, password = decoded_auth.split(':', 1)
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+      log_warning('Unable to decode GHCR auth token; skipping registry env setup.')
+      return
+
+  os.environ['SNYK_REGISTRY_USERNAME'] = username
+  os.environ['SNYK_REGISTRY_PASSWORD'] = password
+  log_debug('Set SNYK registry credentials from GHCR_AUTH_CONFIG.')
+
+
 def main():
   if '-f' in sys.argv or '--full' in sys.argv:
     job.name = 'hmpps-snyk-discovery-full'
@@ -55,6 +102,7 @@ def main():
 
   slack = Slack()
   _normalise_service_catalogue_endpoint_for_local_testing()
+  _set_snyk_registry_credentials_from_ghcr_auth_config()
   sc = ServiceCatalogue()
 
   if not sc.connection_ok:
