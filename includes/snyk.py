@@ -49,7 +49,6 @@ def get_thread_cache_dir():
     return snyk_cache_dir
   return os.path.join(snyk_cache_dir, f'thread-{threading.get_ident()}')
 
-
 def cleanup_docker_after_scan(image_name):
   if not get_env_bool('SNYK_DOCKER_CLEANUP', default=True):
     return
@@ -515,3 +514,4 @@ def scan_hmpps_base_container_images(sc):
     finally:
       cleanup_docker_after_scan(image_name)
       cleanup_snyk_cache_after_scan(image_name)
+      
