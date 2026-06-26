@@ -5,6 +5,7 @@ import json
 import platform
 import shutil
 import threading
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import sleep
 from hmpps.services.job_log_handling import (
@@ -215,9 +216,36 @@ def parse_snyk_json_output(output_text):
   raise ValueError('Unable to parse JSON from Snyk output')
 
 
-def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
+def create_snyk_policy_file(component_name, snyk_ignore_content):
+  if not snyk_ignore_content:
+    return None
+
+  normalized_content = str(snyk_ignore_content).strip()
+  if not normalized_content:
+    return None
+
+  try:
+    file_descriptor, policy_path = tempfile.mkstemp(
+      prefix='snyk-policy-',
+      suffix='.snyk',
+    )
+    with os.fdopen(file_descriptor, 'w', encoding='utf-8') as policy_file:
+      policy_file.write(normalized_content)
+      if not normalized_content.endswith('\n'):
+        policy_file.write('\n')
+    log_debug(f'Created temporary Snyk policy file for {component_name}: {policy_path}')
+    return policy_path
+  except Exception as e:
+    log_error(f'Failed to create Snyk policy file for {component_name}: {e}')
+    return None
+
+
+def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=None):
   log_info(f'Running Snyk scan on {image_name}')
   command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
+  if policy_file_path:
+    log_info(f'Using Snyk policy file: {policy_file_path}')
+    command.append(f'--policy-path={policy_file_path}')
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
     result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
@@ -285,7 +313,12 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None):
         f'after {backoff_seconds}s...'
       )
       sleep(backoff_seconds)
-      return run_snyk_scan(image_name, retry_count, cache_dir=target_cache_dir)
+      return run_snyk_scan(
+        image_name,
+        retry_count,
+        cache_dir=target_cache_dir,
+        policy_file_path=policy_file_path,
+      )
     log_error(f'Snyk scan failed for {image_name}: {error_output}')
     return {'error': error_output}, image_name
   except Exception as e:
@@ -297,7 +330,9 @@ def scan_component_image(services, component, retry_count):
   component_name = component['component_name']
   component_build_image_tag = component['build_image_tag']
   image_name = f'{component["container_image_repo"]}:{component_build_image_tag}'
+  component_snyk_ignore = component.get('snyk_ignore')
   thread_cache_dir = get_thread_cache_dir()
+  policy_file_path = create_snyk_policy_file(component_name, component_snyk_ignore)
 
   try:
     # Perform the Snyk scan
@@ -305,6 +340,7 @@ def scan_component_image(services, component, retry_count):
       image_name,
       retry_count,
       cache_dir=thread_cache_dir,
+      policy_file_path=policy_file_path,
     )
     vulnerabilities = []
 
@@ -328,6 +364,13 @@ def scan_component_image(services, component, retry_count):
     )
     return vulnerabilities
   finally:
+    if policy_file_path and os.path.exists(policy_file_path):
+      try:
+        os.remove(policy_file_path)
+      except Exception as e:
+        log_debug(
+          f'Failed removing temporary Snyk policy file for {component_name}: {e}'
+        )
     cleanup_docker_after_scan(image_name)
     cleanup_snyk_cache_after_scan(image_name, cache_dir=thread_cache_dir)
 

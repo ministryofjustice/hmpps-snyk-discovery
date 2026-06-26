@@ -89,7 +89,7 @@ def get_new_container_image_list(sc, image_list):
 
 def extract_image_list(environments_data):
   filtered_components = []
-  unique_components = set()
+  unique_component_keys = set()
 
   for environment in environments_data:
     if component := environment.get('component', {}):
@@ -106,6 +106,8 @@ def extract_image_list(environments_data):
         )
       container_image_repo = component.get('container_image')
       if container_image_repo:
+        raw_snyk_ignore = component.get('snyk_ignore')
+        snyk_ignore = str(raw_snyk_ignore or '').strip()
         log_debug(
           f'environment build image tag for {component.get("name")}: '
           f'{environment.get("build_image_tag")}'
@@ -114,11 +116,12 @@ def extract_image_list(environments_data):
           'component_name': component_name,
           'container_image_repo': container_image_repo,
           'build_image_tag': build_image_tag,
+          'snyk_ignore': snyk_ignore,
         }
         log_debug(f'filtered_component: {filtered_component}')
-        component_tuple = tuple(filtered_component.items())
-        if component_tuple not in unique_components:
-          unique_components.add(component_tuple)
+        component_key = (component_name, container_image_repo, build_image_tag)
+        if component_key not in unique_component_keys:
+          unique_component_keys.add(component_key)
           filtered_components.append(filtered_component)
       else:
         namespace = environment.get('namespace')
