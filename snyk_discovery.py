@@ -122,9 +122,15 @@ def main():
 
   image_list = snyk_scans.get_image_list(sc=sc)
   snyk_scans.delete_sc_snyk_scan_results(sc=sc)
-  snyk.scan_deployed_image(sc=sc, image_list=image_list)
+  vulnerability_sync_state = snyk_scans.create_vulnerability_sync_state(sc=sc)
+  snyk.scan_deployed_image(
+    sc=sc,
+    image_list=image_list,
+    vulnerability_sync_state=vulnerability_sync_state,
+  )
   snyk.scan_hmpps_base_container_images(sc=sc)
   snyk_scans.update_scan_cve_details(sc=sc)
+  snyk_scans.delete_orphan_snyk_vulnerabilities(sc=sc)
   snyk_scans.send_summary_to_slack(sc=sc, slack=slack)
   if job.error_messages:
     sc.update_scheduled_job('Errors')
