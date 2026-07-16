@@ -407,7 +407,8 @@ def delete_orphan_snyk_vulnerabilities(sc):
 
   log_info(
     'Orphan vulnerability cleanup complete: '
-    f'{deleted_count} deleted, {len(active_snyk_ids)} active snyk_ids referenced by scans.'
+    f'{deleted_count} deleted, {len(active_snyk_ids)} '
+    'active snyk_ids referenced by scans.'
   )
 
 def upsert_vulnerabilities(sc, vulnerabilities, vulnerability_sync_state=None):
