@@ -22,6 +22,40 @@ def get_image_list(sc):
     image_list = get_new_container_image_list(sc, image_list)
   return image_list
 
+def create_vulnerability_sync_state(sc):
+  existing_records = sc.get_all_records('snyk-vulnerabilities') or []
+  existing = {}
+
+  for record in existing_records:
+    snyk_id = record.get('snyk_id')
+    document_id = record.get('documentId')
+    normalized = _normalize_vulnerability_record(record)
+    normalized['documentId'] = document_id
+    existing[snyk_id] = normalized
+
+  log_info(
+    f'Loaded {len(existing)} existing vulnerability records into memory for sync.'
+  )
+  return {
+    'existing': existing,
+  }
+
+def _normalize_vulnerability_record(record):
+  return {
+    'snyk_id': record.get('snyk_id'),
+    'title': record.get('title'),
+    'description': record.get('description') or record.get('title') or '',
+    'severity': str(record.get('severity', 'UNKNOWN')).upper(),
+    'language': str(record.get('language') or '').strip() or 'unknown',
+    'cves': sorted(set(record.get('cves') or [])),
+    'published_date': record.get('published_date'),
+    'fix_available': str(record.get('fix_available', 'False')),
+    'affected_package_name': record.get('affected_package_name'),
+    'affected_versions': sorted(set(record.get('affected_versions') or [])),
+    'cvss_score': record.get('cvss_score'),
+    'exploit_maturity': record.get('exploit_maturity') or 'UNKNOWN',
+    'fixed_versions': sorted(set(record.get('fixed_versions') or [])),
+  }
 
 def delete_sc_snyk_scan_results(sc):
   # Fetch the list of records
@@ -40,24 +74,28 @@ def delete_sc_snyk_scan_results(sc):
       job.error_messages.append(
         f'Error deleting Snyk scan record with ID {record_document_id}: {e}'
       )
-  snyk_vulnerabilities_data = sc.get_all_records('snyk-vulnerabilities')
-  for record in snyk_vulnerabilities_data:
-    if job.name == 'hmpps-snyk-discovery-incremental':
-      if not record.get('name', '').startswith('hmpps-base-container-images'):
-        continue
+  # snyk-vulnerabilities records will not be deleted from this branch feat/HEAT-1338-2,
+  # we will only delete at the end of the job if vulnerability no longer exists for 
+  # any image.
 
-    record_document_id = record.get('documentId')
-    try:
-      sc.delete('snyk-vulnerabilities', record_document_id)
-      log_info(f'Deleted Snyk vulnerability record with ID: {record_document_id}')
-    except requests.exceptions.RequestException as e:
-      log_error(
-        'Error deleting Snyk vulnerability record with ID '
-        f'{record_document_id}: {e}'
-      )
-      job.error_messages.append(
-        f'Error deleting Snyk vulnerability record with ID {record_document_id}: {e}'
-      )
+  # snyk_vulnerabilities_data = sc.get_all_records('snyk-vulnerabilities')
+  # for record in snyk_vulnerabilities_data:
+  #   if job.name == 'hmpps-snyk-discovery-incremental':
+  #     if not record.get('name', '').startswith('hmpps-base-container-images'):
+  #       continue
+
+  #   record_document_id = record.get('documentId')
+  #   try:
+  #     sc.delete('snyk-vulnerabilities', record_document_id)
+  #     log_info(f'Deleted Snyk vulnerability record with ID: {record_document_id}')
+  #   except requests.exceptions.RequestException as e:
+  #     log_error(
+  #       'Error deleting Snyk vulnerability record with ID '
+  #       f'{record_document_id}: {e}'
+  #     )
+  #     job.error_messages.append(
+  #       f'Error deleting Snyk vulnerability record with ID {record_document_id}: {e}'
+  #     )
 
 
 def get_new_container_image_list(sc, image_list):
@@ -318,7 +356,7 @@ def send_summary_to_slack(sc, slack):
     log_info('Sent slack alert for significant vulnerabilities in base images.')
 
 
-def update_scan_cve_details(sc):
+def update_scan_cve_details(sc): # This will remain unchanged in feat/HEAT-1338-2 branch
   """Populate snyk-scans with CVE details for each snyk_id at end of job."""
   snyk_scan_records = sc.get_all_records('snyk-scans') or []
   if not snyk_scan_records:
@@ -355,12 +393,59 @@ def update_scan_cve_details(sc):
     except Exception as e:
       log_error(f'Failed updating snyk_cves for snyk-scan record {document_id}: {e}')
 
-def upsert_vulnerabilities(sc, vulnerabilities):
+
+def delete_orphan_snyk_vulnerabilities(sc):
+  """Delete vulnerability records that are no longer referenced by any snyk-scan."""
+  snyk_scan_records = sc.get_all_records('snyk-scans') or []
+  active_snyk_ids = set()
+
+  for scan_record in snyk_scan_records:
+    for snyk_id in scan_record.get('snyk_ids') or []:
+      if snyk_id:
+        active_snyk_ids.add(snyk_id)
+
+  vulnerability_records = sc.get_all_records('snyk-vulnerabilities') or []
+  deleted_count = 0
+
+  for vuln_record in vulnerability_records:
+    snyk_id = vuln_record.get('snyk_id')
+    document_id = vuln_record.get('documentId')
+    if not snyk_id or not document_id:
+      continue
+
+    if snyk_id in active_snyk_ids:
+      continue
+
+    try:
+      sc.delete('snyk-vulnerabilities', document_id)
+      deleted_count += 1
+      log_info(
+        f'Deleted orphan snyk-vulnerabilities record {document_id} for {snyk_id}'
+      )
+    except Exception as e:
+      log_error(
+        'Failed deleting orphan snyk-vulnerabilities record '
+        f'{document_id} for {snyk_id}: {e}'
+      )
+
+  log_info(
+    'Orphan vulnerability cleanup complete: '
+    f'{deleted_count} deleted, {len(active_snyk_ids)} active snyk_ids referenced by scans.'
+  )
+
+def upsert_vulnerabilities(sc, vulnerabilities, vulnerability_sync_state=None):
   severity_rank = {
     'CRITICAL': 4,
     'HIGH': 3,
     'MEDIUM': 2,
     'LOW': 1,
+    'UNKNOWN': 0,
+  }
+  exploit_maturity_rank = {
+    'MATURE': 4,
+    'PROOF_OF_CONCEPT': 3,
+    'FUNCTIONAL': 2,
+    'NO_KNOWN_EXPLOIT': 1,
     'UNKNOWN': 0,
   }
 
@@ -370,9 +455,18 @@ def upsert_vulnerabilities(sc, vulnerabilities):
     if not snyk_id:
       continue
 
-    existing_records = sc.get_all_records(
-      f'snyk-vulnerabilities?filters[snyk_id][$eq]={snyk_id}'
-    )
+    state_existing_record = None
+    if vulnerability_sync_state:
+      state_existing_record = (vulnerability_sync_state.get('existing') or {}).get(
+        snyk_id
+      )
+
+    if state_existing_record:
+      existing_records = [state_existing_record]
+    else:
+      existing_records = sc.get_all_records(
+        f'snyk-vulnerabilities?filters[snyk_id][$eq]={snyk_id}'
+      )
 
     new_cves = vuln.get('cve', [])
     new_fixed_versions = sorted(set(vuln.get('fixedIn', [])))
@@ -381,6 +475,10 @@ def upsert_vulnerabilities(sc, vulnerabilities):
     )
     new_severity = vuln.get('severity', 'UNKNOWN').upper()
     new_language = str(vuln.get('language') or '').strip()
+    new_fix_available = str(bool(vuln.get('fixable')))
+    new_package_name = vuln.get('name') or vuln.get('packageName')
+    new_cvss_score = vuln.get('cvssScore')
+    new_exploit_maturity = str(vuln.get('exploitMaturity') or 'UNKNOWN').upper()
     publication_date = vuln.get('snykPublicationDate')
     if isinstance(publication_date, str) and 'T' in publication_date:
       # Strapi `date` fields expect YYYY-MM-DD, not a full timestamp.
@@ -394,11 +492,11 @@ def upsert_vulnerabilities(sc, vulnerabilities):
       'language': new_language or 'unknown',
       'cves': new_cves,
       'published_date': publication_date,
-      'fix_available': str(bool(vuln.get('fixable'))),
-      'affected_package_name': vuln.get('name') or vuln.get('packageName'),
+      'fix_available': new_fix_available,
+      'affected_package_name': new_package_name,
       'affected_versions': new_affected_versions,
-      'cvss_score': vuln.get('cvssScore'),
-      'exploit_maturity': vuln.get('exploitMaturity') or 'UNKNOWN',
+      'cvss_score': new_cvss_score,
+      'exploit_maturity': new_exploit_maturity,
       'fixed_versions': new_fixed_versions,
     }
 
@@ -408,13 +506,27 @@ def upsert_vulnerabilities(sc, vulnerabilities):
         f'Payload for new vulnerability {snyk_id}: '
         f'{json.dumps(snyk_vulnerability_payload)}'
       )
-      sc.add('snyk-vulnerabilities', snyk_vulnerability_payload)
+      response = sc.add('snyk-vulnerabilities', snyk_vulnerability_payload)
+
+      if vulnerability_sync_state and response:
+        log_info(f'Updating in-memory sync state for new vulnerability {snyk_id}')
+        new_document_id = response.get('data', {}).get('documentId')
+        in_memory_record = _normalize_vulnerability_record(snyk_vulnerability_payload)
+        in_memory_record['documentId'] = new_document_id
+        vulnerability_sync_state.setdefault('existing', {})[snyk_id] = in_memory_record
       continue
 
     existing = existing_records[0]
 
     existing_severity = str(existing.get('severity', 'UNKNOWN')).upper()
     existing_language = str(existing.get('language') or '').strip()
+    existing_fix_available = str(existing.get('fix_available') or 'False')
+    existing_package_name = existing.get('affected_package_name')
+    existing_cvss_score = existing.get('cvss_score')
+    existing_exploit_maturity = str(
+      existing.get('exploit_maturity') or 'UNKNOWN'
+    ).upper()
+    existing_publication_date = existing.get('published_date')
     existing_cves = existing.get('cves') or []
     existing_fixed_versions = sorted(set(existing.get('fixed_versions') or []))
     existing_affected_versions = sorted(set(existing.get('affected_versions') or []))
@@ -430,12 +542,41 @@ def upsert_vulnerabilities(sc, vulnerabilities):
 
     final_severity = existing_severity
     final_language = existing_language or new_language or 'unknown'
+    final_fix_available = (
+      'True'
+      if str(existing_fix_available).lower() == 'true'
+      or str(new_fix_available).lower() == 'true'
+      else 'False'
+    )
+    final_package_name = existing_package_name or new_package_name
+
+    final_publication_date = existing_publication_date or publication_date
+    if existing_publication_date and publication_date:
+      final_publication_date = min(existing_publication_date, publication_date)
+
+    final_cvss_score = existing_cvss_score
+    if existing_cvss_score is None and new_cvss_score is not None:
+      final_cvss_score = new_cvss_score
+    elif existing_cvss_score is not None and new_cvss_score is not None:
+      final_cvss_score = max(existing_cvss_score, new_cvss_score)
+
+    final_exploit_maturity = existing_exploit_maturity
+    if exploit_maturity_rank.get(new_exploit_maturity, 0) > exploit_maturity_rank.get(
+      existing_exploit_maturity, 0
+    ):
+      final_exploit_maturity = new_exploit_maturity
+
     if severity_rank.get(new_severity, 0) > severity_rank.get(existing_severity, 0):
       final_severity = new_severity
 
     if (
       final_severity == existing_severity
       and final_language == existing_language
+      and final_fix_available == existing_fix_available
+      and final_package_name == existing_package_name
+      and final_publication_date == existing_publication_date
+      and final_cvss_score == existing_cvss_score
+      and final_exploit_maturity == existing_exploit_maturity
       and merged_cves == normalized_existing_cves
       and merged_fixed_versions == existing_fixed_versions
       and merged_affected_versions == existing_affected_versions
@@ -448,6 +589,11 @@ def upsert_vulnerabilities(sc, vulnerabilities):
     update_snyk_vulnerability_payload = {
       'severity': final_severity,
       'language': final_language,
+      'fix_available': final_fix_available,
+      'affected_package_name': final_package_name,
+      'published_date': final_publication_date,
+      'cvss_score': final_cvss_score,
+      'exploit_maturity': final_exploit_maturity,
       'cves': merged_cves,
       'fixed_versions': merged_fixed_versions,
       'affected_versions': merged_affected_versions,
@@ -463,5 +609,15 @@ def upsert_vulnerabilities(sc, vulnerabilities):
         existing.get('documentId'),
         update_snyk_vulnerability_payload,
       )
+
+      if vulnerability_sync_state:
+        updated_in_memory_record = {
+          **_normalize_vulnerability_record(existing),
+          **_normalize_vulnerability_record(update_snyk_vulnerability_payload),
+          'documentId': existing.get('documentId'),
+        }
+        vulnerability_sync_state.setdefault('existing', {})[
+          snyk_id
+        ] = updated_in_memory_record
     except Exception as e:
       log_error(f'Failed updating vuln {snyk_id}: {e}')

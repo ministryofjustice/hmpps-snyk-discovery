@@ -481,7 +481,7 @@ def scan_result_summary(scan_result):
     'snyk_ids': list(aggregated_vulns.keys())
   }
 
-def scan_deployed_image(sc, image_list):
+def scan_deployed_image(sc, image_list, vulnerability_sync_state):
   valid_components = [
     component
     for component in image_list
@@ -501,7 +501,11 @@ def scan_deployed_image(sc, image_list):
       )
       component_vulnerabilities = scan_component_image(sc, component, 1) or []
       if component_vulnerabilities:
-        snyk_scans.upsert_vulnerabilities(sc, component_vulnerabilities)
+        snyk_scans.upsert_vulnerabilities(
+          sc,
+          component_vulnerabilities,
+          vulnerability_sync_state=vulnerability_sync_state,
+        )
   else:
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
       future_to_component = {
@@ -515,7 +519,11 @@ def scan_deployed_image(sc, image_list):
         try:
           component_vulnerabilities = future.result() or []
           if component_vulnerabilities:
-            snyk_scans.upsert_vulnerabilities(sc, component_vulnerabilities)
+            snyk_scans.upsert_vulnerabilities(
+              sc,
+              component_vulnerabilities,
+              vulnerability_sync_state=vulnerability_sync_state,
+            )
         except Exception as e:
           log_error(
             f'Scan worker failed for {component.get("component_name", "unknown")}: {e}'
