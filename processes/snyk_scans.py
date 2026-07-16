@@ -74,29 +74,6 @@ def delete_sc_snyk_scan_results(sc):
       job.error_messages.append(
         f'Error deleting Snyk scan record with ID {record_document_id}: {e}'
       )
-  # snyk-vulnerabilities records will not be deleted from this branch feat/HEAT-1338-2,
-  # we will only delete at the end of the job if vulnerability no longer exists for 
-  # any image.
-
-  # snyk_vulnerabilities_data = sc.get_all_records('snyk-vulnerabilities')
-  # for record in snyk_vulnerabilities_data:
-  #   if job.name == 'hmpps-snyk-discovery-incremental':
-  #     if not record.get('name', '').startswith('hmpps-base-container-images'):
-  #       continue
-
-  #   record_document_id = record.get('documentId')
-  #   try:
-  #     sc.delete('snyk-vulnerabilities', record_document_id)
-  #     log_info(f'Deleted Snyk vulnerability record with ID: {record_document_id}')
-  #   except requests.exceptions.RequestException as e:
-  #     log_error(
-  #       'Error deleting Snyk vulnerability record with ID '
-  #       f'{record_document_id}: {e}'
-  #     )
-  #     job.error_messages.append(
-  #       f'Error deleting Snyk vulnerability record with ID {record_document_id}: {e}'
-  #     )
-
 
 def get_new_container_image_list(sc, image_list):
   new_image_list = []
@@ -581,7 +558,7 @@ def upsert_vulnerabilities(sc, vulnerabilities, vulnerability_sync_state=None):
       and merged_fixed_versions == existing_fixed_versions
       and merged_affected_versions == existing_affected_versions
     ):
-      log_info(
+      log_debug(
         f'No change for vulnerability {snyk_id}; skipping snyk-vulnerabilities update'
       )
       continue
@@ -600,7 +577,7 @@ def upsert_vulnerabilities(sc, vulnerabilities, vulnerability_sync_state=None):
     }
 
     try:
-      log_info(
+      log_debug(
         f'Updating existing vulnerability {snyk_id} '
         'in snyk-vulnerabilities collection'
       )
