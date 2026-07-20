@@ -1,13 +1,32 @@
 version: 2
 updates:
   - package-ecosystem: "uv"
-    directory: "/"  
+    cooldown:
+      default-days: 7
+    directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+  
   - package-ecosystem: "github-actions"
-    directory: "/"  # Location of workflow files
+    cooldown:
+      default-days: 7
+    directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "ministryofjustice/hmpps-github-actions/*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+    groups:
+      github-actions-dependencies:
+        patterns:
+          - "*"
+
   - package-ecosystem: "helm"
     directory: "/helm_deploy/hmpps-snyk-discovery"
     schedule:
@@ -16,6 +35,7 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-patch"
+  
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
