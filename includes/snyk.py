@@ -8,6 +8,7 @@ import threading
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import sleep
+from hmpps.utils.utilities import get_request_proxies
 from hmpps.services.job_log_handling import (
   log_debug,
   log_error,
@@ -144,7 +145,12 @@ def install():
     else:
       snyk_url = get_snyk_download_url()
       log_info(f'Downloading Snyk from {snyk_url}...')
-      response = requests.get(snyk_url, stream=True, timeout=30)
+      response = requests.get(
+        snyk_url,
+        stream=True,
+        timeout=30,
+        proxies=get_request_proxies(),
+      )
       response.raise_for_status()
 
       with open(snyk_binary, 'wb') as f:
