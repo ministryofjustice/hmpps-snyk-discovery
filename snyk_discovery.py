@@ -7,6 +7,7 @@ import sys
 from urllib.parse import urlparse
 
 from hmpps import ServiceCatalogue, Slack
+from hmpps.utils.utilities import get_request_proxies
 import processes.snyk_scans as snyk_scans
 import includes.snyk as snyk
 from hmpps.services.job_log_handling import (
@@ -20,6 +21,27 @@ from hmpps.services.job_log_handling import (
 
 # Set maximum number of concurrent threads to run, try to avoid secondary
 # github api limits.
+
+
+def _validate_proxy_configuration():
+  """Validate proxy requirement while using library-managed proxy handling."""
+  allow_no_proxy_local = (
+    os.getenv('ALLOW_NO_PROXY_LOCAL', '').strip().lower() in {'1', 'true', 'yes'}
+  )
+  proxies = get_request_proxies()
+
+  if not proxies:
+    if allow_no_proxy_local:
+      log_warning(
+        'ALLOW_NO_PROXY_LOCAL enabled: running without outbound proxy settings.'
+      )
+      return
+    raise RuntimeError(
+      'Outbound proxy is required. Set HTTPS_PROXY or HTTP_PROXY for this job, '
+      'or set ALLOW_NO_PROXY_LOCAL=true for local testing only.'
+    )
+
+  log_info('Outbound proxy enabled for Snyk discovery clients.')
 
 
 def _normalise_service_catalogue_endpoint_for_local_testing():
@@ -99,6 +121,8 @@ def main():
       'or -f or --full for full scan.'
     )
     sys.exit(1)
+
+  _validate_proxy_configuration()
 
   slack = Slack()
   _normalise_service_catalogue_endpoint_for_local_testing()
