@@ -13,11 +13,7 @@ https://developer-portal.hmpps.service.justice.gov.uk/components/snyk
 
 ## Local Testing Modes
 
-Test without proxy (local only):
-
 ```bash
-unset HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy
-export ALLOW_NO_PROXY_LOCAL=true
 uv run python -u snyk_discovery.py -i
 ```
 
