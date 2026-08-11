@@ -10,4 +10,19 @@ snykScanCronJob:
   incremental_scan_schedule: "00 9 * * 1-5"
   env:
     LOG_LEVEL: info
-
+  namespace_secrets:
+    hmpps-snyk-discovery:
+      SERVICE_CATALOGUE_API_ENDPOINT: "SERVICE_CATALOGUE_API_ENDPOINT"
+      SERVICE_CATALOGUE_API_KEY: "SERVICE_CATALOGUE_API_KEY"
+      SNYK_TOKEN: "SNYK_TOKEN"
+    hmpps-sre-app-slack-bot:
+      SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN"
+    ghcr-pull-secret:
+      GHCR_AUTH_CONFIG: ".dockerconfigjson"
+    hmpps-envoy-https-proxy-env:
+      HTTP_PROXY: "HTTP_PROXY"
+      HTTPS_PROXY: "HTTPS_PROXY"
+      NO_PROXY: "NO_PROXY"
+      http_proxy: "HTTP_PROXY"
+      https_proxy: "HTTPS_PROXY"
+      no_proxy: "NO_PROXY"
