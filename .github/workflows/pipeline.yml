@@ -55,6 +55,7 @@ jobs:
       registry_org: 'ministryofjustice'
       additional_docker_tag: ${{ inputs.additional_docker_tag }}
       push: ${{ inputs.push || true }}
+      generate_sbom: true
       docker_multiplatform: false
 
   deploy_dev:
