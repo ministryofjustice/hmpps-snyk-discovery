@@ -54,14 +54,18 @@ jobs:
       registry_org: 'ministryofjustice'
       additional_docker_tag: ${{ inputs.additional_docker_tag }}
       push: ${{ inputs.push || true }}
+      generate_sbom: true
       docker_multiplatform: false
 
   deploy_dev:
     name: Deploy to the development environment
     needs:
       - build
-    uses: ministryofjustice/hmpps-github-actions/.github/workflows/deploy_env.yml@v2 # WORKFLOW_VERSION
+    uses: ministryofjustice/hmpps-github-actions/.github/workflows/deploy_to_env.yml@v2 # WORKFLOW_VERSION
     secrets: inherit
+    permissions: 
+      contents: read
+      id-token: write
     with:
       environment: 'dev'
       app_version: '${{ needs.build.outputs.app_version }}'
@@ -72,8 +76,11 @@ jobs:
     needs:
       - build
       - deploy_dev
-    uses: ministryofjustice/hmpps-github-actions/.github/workflows/deploy_env.yml@v2 # WORKFLOW_VERSION
+    uses: ministryofjustice/hmpps-github-actions/.github/workflows/deploy_to_env.yml@v2 # WORKFLOW_VERSION
     secrets: inherit
+    permissions: 
+      contents: read
+      id-token: write    
     with:
       environment: 'prod'
       app_version: '${{ needs.build.outputs.app_version }}'
