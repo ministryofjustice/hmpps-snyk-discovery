@@ -109,7 +109,8 @@ def _setup_ecr_authentication_via_irsa():
   - AWS_WEB_IDENTITY_TOKEN_FILE: Path to JWT token file
   
   Returns:
-      bool: True if IRSA is configured and credentials written successfully, False otherwise
+      bool: True if IRSA is configured and credentials written
+            successfully, False otherwise
   """
   # Check if IRSA environment variables are present
   aws_role_arn = os.getenv('AWS_ROLE_ARN', '').strip()
@@ -200,9 +201,12 @@ def _print_registry_status(ghcr_available, ecr_available, quay_available=True):
   log_info('')
   log_info('Registry Authentication Status:')
   log_info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-  log_info(f'  quay.io (Public):      {"✓ No auth required" if quay_available else "✗ Not accessible"}')
-  log_info(f'  GHCR (ghcr.io):        {"✓ Available" if ghcr_available else "✗ Not configured"}')
-  log_info(f'  ECR (*.dkr.ecr.*):     {"✓ Available (IRSA)" if ecr_available else "✗ Not configured"}')
+  quay_status = '✓ No auth required' if quay_available else '✗ Not accessible'
+  log_info(f'  quay.io (Public):      {quay_status}')
+  ghcr_status = '✓ Available' if ghcr_available else '✗ Not configured'
+  log_info(f'  GHCR (ghcr.io):        {ghcr_status}')
+  ecr_status = '✓ Available (IRSA)' if ecr_available else '✗ Not configured'
+  log_info(f'  ECR (*.dkr.ecr.*):     {ecr_status}')
   log_info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   log_info('')
   
@@ -247,7 +251,10 @@ def main():
   quay_available = True  # quay.io is public, no auth needed
   if not _print_registry_status(ghcr_available, ecr_available, quay_available):
     log_critical('No registries are accessible!')
-    slack.alert('hmpps-snyk-discovery: No registries are accessible (quay.io, GHCR, ECR)')
+    slack.alert(
+      'hmpps-snyk-discovery: No registries are accessible '
+      '(quay.io, GHCR, ECR)'
+    )
     sys.exit(1)
   
   # Step 5: Connect to Service Catalogue
