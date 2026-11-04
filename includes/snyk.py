@@ -182,7 +182,12 @@ def get_platform_fallbacks():
   ]
 
 
-def run_snyk_subprocess(command, cache_dir=None, snyk_username=None, snyk_password=None):
+def run_snyk_subprocess(
+    command,
+    cache_dir=None,
+    snyk_username=None,
+    snyk_password=None,
+):
   """
   Run Snyk subprocess with isolated environment variables per thread.
   
