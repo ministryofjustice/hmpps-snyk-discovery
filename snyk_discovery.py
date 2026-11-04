@@ -4,7 +4,6 @@ import binascii
 import json
 import os
 import sys
-import pathlib
 from urllib.parse import urlparse
 
 import boto3
@@ -185,10 +184,16 @@ def _print_registry_status():
   quay_status = '✓ No auth required (public)'
   log_info(f'  quay.io:               {quay_status}')
   
-  ghcr_status = '✓ Configured' if (ghcr_username and ghcr_password) else '✗ Not configured'
+  ghcr_status = (
+    '✓ Configured' if (ghcr_username and ghcr_password)
+    else '✗ Not configured'
+  )
   log_info(f'  GHCR (ghcr.io):        {ghcr_status}')
   
-  ecr_status = '✓ Configured (IRSA)' if (ecr_username and ecr_password) else '✗ Not configured'
+  ecr_status = (
+    '✓ Configured (IRSA)' if (ecr_username and ecr_password)
+    else '✗ Not configured'
+  )
   log_info(f'  ECR (*.dkr.ecr.*):     {ecr_status}')
   
   log_info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
