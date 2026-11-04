@@ -15,9 +15,6 @@ from hmpps.services.job_log_handling import (
 )
 import processes.snyk_scans as snyk_scans
 
-# Thread-local storage for per-thread credentials
-_thread_local = threading.local()
-
 
 default_snyk_root = '/app/snyk_cache' if os.path.isdir('/app/snyk_cache') else '/tmp'
 snyk_cache_dir = os.getenv(
@@ -185,11 +182,35 @@ def get_platform_fallbacks():
   ]
 
 
-def run_snyk_subprocess(command, cache_dir=None):
+def run_snyk_subprocess(command, cache_dir=None, snyk_username=None, snyk_password=None):
+  """
+  Run Snyk subprocess with isolated environment variables per thread.
+  
+  Args:
+      command: Snyk command to run
+      cache_dir: Cache directory for this thread
+      snyk_username: Registry username (not set in environment if None)
+      snyk_password: Registry password (not set in environment if None)
+  
+  Returns:
+      subprocess.CompletedProcess result
+  """
   target_cache_dir = cache_dir or get_thread_cache_dir()
   os.makedirs(target_cache_dir, exist_ok=True)
   process_env = os.environ.copy()
   process_env['SNYK_CACHE_PATH'] = target_cache_dir
+  
+  # Set registry credentials only for this subprocess (isolated per thread)
+  if snyk_username:
+    process_env['SNYK_REGISTRY_USERNAME'] = snyk_username
+  else:
+    process_env.pop('SNYK_REGISTRY_USERNAME', None)
+  
+  if snyk_password:
+    process_env['SNYK_REGISTRY_PASSWORD'] = snyk_password
+  else:
+    process_env.pop('SNYK_REGISTRY_PASSWORD', None)
+  
   return subprocess.run(
     command,
     capture_output=True,
@@ -272,77 +293,56 @@ def _detect_registry_type(image_reference):
     return 'unknown'
 
 
-def _set_registry_credentials_for_image(image_reference):
+def _get_registry_credentials(image_reference):
   """
-  Set SNYK_REGISTRY_USERNAME and SNYK_REGISTRY_PASSWORD based on image registry.
-  Uses credentials stored in GHCR_USERNAME, GHCR_PASSWORD, ECR_USERNAME, ECR_PASSWORD.
-  
-  Stores credentials in thread-local storage to support concurrent scanning.
-  Each thread has its own credential context.
+  Get registry credentials for an image based on its registry type.
+  Returns credentials as (username, password) tuple.
+  Credentials are NOT set in os.environ - caller must pass to subprocess.
   
   Args:
       image_reference: Image URL to scan
+  
+  Returns:
+      tuple: (username, password) or (None, None) if no credentials needed
   """
   registry_type = _detect_registry_type(image_reference)
-  
-  # Initialize thread-local storage for this thread
-  if not hasattr(_thread_local, 'snyk_username'):
-    _thread_local.snyk_username = None
-    _thread_local.snyk_password = None
-  
-  # Always clear previous credentials to avoid cross-registry conflicts
-  _thread_local.snyk_username = None
-  _thread_local.snyk_password = None
   
   if registry_type == 'ghcr':
     ghcr_username = os.getenv('GHCR_USERNAME')
     ghcr_password = os.getenv('GHCR_PASSWORD')
     if ghcr_username and ghcr_password:
-      _thread_local.snyk_username = ghcr_username
-      _thread_local.snyk_password = ghcr_password
-      log_debug(f'Set GHCR credentials for image: {image_reference}')
-      _apply_thread_credentials()
+      log_debug(f'Using GHCR credentials for image: {image_reference}')
+      return ghcr_username, ghcr_password
     else:
       log_error(f'Cannot scan {image_reference}: GHCR credentials not configured')
+      return None, None
   
   elif registry_type == 'ecr':
     ecr_username = os.getenv('ECR_USERNAME')
     ecr_password = os.getenv('ECR_PASSWORD')
     if ecr_username and ecr_password:
-      _thread_local.snyk_username = ecr_username
-      _thread_local.snyk_password = ecr_password
-      log_debug(f'Set ECR credentials for image: {image_reference}')
-      _apply_thread_credentials()
+      log_debug(f'Using ECR credentials for image: {image_reference}')
+      return ecr_username, ecr_password
     else:
       log_error(f'Cannot scan {image_reference}: ECR credentials not configured')
+      return None, None
   
   elif registry_type == 'quay':
     log_debug(f'No credentials needed for public quay.io image: {image_reference}')
+    return None, None
   
   else:
     log_debug(f'Unknown registry for image: {image_reference}')
-
-
-def _apply_thread_credentials():
-  """
-  Apply thread-local credentials to SNYK_REGISTRY_* environment variables.
-  This is called by _set_registry_credentials_for_image() and ensures
-  each thread has its own credential context.
-  """
-  if hasattr(_thread_local, 'snyk_username') and _thread_local.snyk_username:
-    os.environ['SNYK_REGISTRY_USERNAME'] = _thread_local.snyk_username
-  else:
-    os.environ.pop('SNYK_REGISTRY_USERNAME', None)
-  
-  if hasattr(_thread_local, 'snyk_password') and _thread_local.snyk_password:
-    os.environ['SNYK_REGISTRY_PASSWORD'] = _thread_local.snyk_password
-  else:
-    os.environ.pop('SNYK_REGISTRY_PASSWORD', None)
+    return None, None
 
 
 def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=None):
-  # Set registry credentials before scanning based on image type
-  _set_registry_credentials_for_image(image_name)
+  """
+  Run Snyk scan on an image with registry-specific credentials.
+  Credentials are passed directly to subprocess, not set in os.environ.
+  """
+  # Get credentials for this image's registry (not set in os.environ)
+  snyk_username, snyk_password = _get_registry_credentials(image_name)
   
   log_info(f'Running Snyk scan on {image_name}')
   command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
@@ -351,7 +351,12 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=No
     command.append(f'--policy-path={policy_file_path}')
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
-    result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
+    result = run_snyk_subprocess(
+      command,
+      cache_dir=target_cache_dir,
+      snyk_username=snyk_username,
+      snyk_password=snyk_password,
+    )
      # Snyk exits with code 1 when vulnerabilities are found, which is expected.
     if result.returncode in (0, 1):
       if not result.stdout:
@@ -377,6 +382,8 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=No
         platform_result = run_snyk_subprocess(
           platform_command,
           cache_dir=target_cache_dir,
+          snyk_username=snyk_username,
+          snyk_password=snyk_password,
         )
         if platform_result.returncode in (0, 1):
           if not platform_result.stdout:
