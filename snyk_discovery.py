@@ -136,73 +136,61 @@ def _setup_ecr_authentication_via_irsa():
       log_error(f'Unable to extract account ID from role ARN: {aws_role_arn}')
       return False
     
-    # Bypass proxy for AWS API calls
-    # boto3 needs direct access to AWS, not through corporate proxy
-    saved_env = {}
-    proxy_env_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']
-    for var in proxy_env_vars:
-      if var in os.environ:
-        saved_env[var] = os.environ.pop(var)
+    # Create boto3 ECR client (uses IRSA credentials automatically)
+    ecr_client = boto3.client('ecr', region_name=aws_region)
     
-      try:
-        # Create boto3 ECR client (uses IRSA credentials automatically)
-        ecr_client = boto3.client('ecr', region_name=aws_region)
-        
-        # Get ECR authorization token from AWS
-        response = ecr_client.get_authorization_token()
-        auth_data = response['authorizationData'][0]
-        
-        # Decode authorization token (base64 encoded username:password)
-        auth_token = base64.b64decode(
-          auth_data['authorizationToken']
-        ).decode('utf-8')
-        username, password = auth_token.split(':')
-        
-        # Write credentials to ~/.docker/config.json
-        docker_config_dir = pathlib.Path.home() / '.docker'
-        docker_config_dir.mkdir(mode=0o700, exist_ok=True)
-        docker_config_file = docker_config_dir / 'config.json'
-        
-        # Load existing config or create new one
-        if docker_config_file.exists():
-          with open(docker_config_file, 'r') as f:
-            config = json.load(f)
-        else:
-          config = {'auths': {}}
-        
-        # Ensure 'auths' section exists
-        if 'auths' not in config:
-          config['auths'] = {}
-        
-        # Add ECR credentials (base64 encoded username:password)
-        credentials = base64.b64encode(
-          f'{username}:{password}'.encode()
-        ).decode()
-        config['auths'][ecr_endpoint] = {'auth': credentials}
-        
-        # Write config back to file
-        with open(docker_config_file, 'w') as f:
-          json.dump(config, f)
-        
-        # Restrict permissions on config file (contains credentials)
-        docker_config_file.chmod(0o600)
-        
-        log_info(f'✓ ECR credentials configured ({ecr_endpoint})')
-        return True
-        
-      except ClientError as e:
-        error_code = e.response['Error']['Code']
-        log_error(
-          f'AWS ECR API error ({error_code}): '
-          f'{e.response["Error"]["Message"]}'
-        )
-        return False
-      except (IOError, OSError) as e:
-        log_error(f'Failed to write Docker config: {e}')
-        return False
-      finally:
-        # Restore proxy environment variables
-        os.environ.update(saved_env)
+    # Get ECR authorization token from AWS
+    response = ecr_client.get_authorization_token()
+    auth_data = response['authorizationData'][0]
+    
+    # Decode authorization token (base64 encoded username:password)
+    auth_token = base64.b64decode(
+      auth_data['authorizationToken']
+    ).decode('utf-8')
+    username, password = auth_token.split(':')
+    
+    # Write credentials to ~/.docker/config.json
+    docker_config_dir = pathlib.Path.home() / '.docker'
+    docker_config_dir.mkdir(mode=0o700, exist_ok=True)
+    docker_config_file = docker_config_dir / 'config.json'
+    
+    # Load existing config or create new one
+    if docker_config_file.exists():
+      with open(docker_config_file, 'r') as f:
+        config = json.load(f)
+    else:
+      config = {'auths': {}}
+    
+    # Ensure 'auths' section exists
+    if 'auths' not in config:
+      config['auths'] = {}
+    
+    # Add ECR credentials (base64 encoded username:password)
+    credentials = base64.b64encode(
+      f'{username}:{password}'.encode()
+    ).decode()
+    config['auths'][ecr_endpoint] = {'auth': credentials}
+    
+    # Write config back to file
+    with open(docker_config_file, 'w') as f:
+      json.dump(config, f)
+    
+    # Restrict permissions on config file (contains credentials)
+    docker_config_file.chmod(0o600)
+    
+    log_info(f'✓ ECR credentials configured ({ecr_endpoint})')
+    return True
+    
+  except ClientError as e:
+    error_code = e.response['Error']['Code']
+    log_error(
+      f'AWS ECR API error ({error_code}): '
+      f'{e.response["Error"]["Message"]}'
+    )
+    return False
+  except (IOError, OSError) as e:
+    log_error(f'Failed to write Docker config: {e}')
+    return False
   except Exception as e:
     log_error(f'Unexpected error during ECR authentication: {e}')
     return False
