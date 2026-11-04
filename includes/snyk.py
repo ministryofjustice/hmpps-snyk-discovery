@@ -15,6 +15,9 @@ from hmpps.services.job_log_handling import (
 )
 import processes.snyk_scans as snyk_scans
 
+# Thread-local storage for per-thread credentials
+_thread_local = threading.local()
+
 
 default_snyk_root = '/app/snyk_cache' if os.path.isdir('/app/snyk_cache') else '/tmp'
 snyk_cache_dir = os.getenv(
@@ -274,22 +277,31 @@ def _set_registry_credentials_for_image(image_reference):
   Set SNYK_REGISTRY_USERNAME and SNYK_REGISTRY_PASSWORD based on image registry.
   Uses credentials stored in GHCR_USERNAME, GHCR_PASSWORD, ECR_USERNAME, ECR_PASSWORD.
   
+  Stores credentials in thread-local storage to support concurrent scanning.
+  Each thread has its own credential context.
+  
   Args:
       image_reference: Image URL to scan
   """
   registry_type = _detect_registry_type(image_reference)
   
+  # Initialize thread-local storage for this thread
+  if not hasattr(_thread_local, 'snyk_username'):
+    _thread_local.snyk_username = None
+    _thread_local.snyk_password = None
+  
   # Always clear previous credentials to avoid cross-registry conflicts
-  os.environ.pop('SNYK_REGISTRY_USERNAME', None)
-  os.environ.pop('SNYK_REGISTRY_PASSWORD', None)
+  _thread_local.snyk_username = None
+  _thread_local.snyk_password = None
   
   if registry_type == 'ghcr':
     ghcr_username = os.getenv('GHCR_USERNAME')
     ghcr_password = os.getenv('GHCR_PASSWORD')
     if ghcr_username and ghcr_password:
-      os.environ['SNYK_REGISTRY_USERNAME'] = ghcr_username
-      os.environ['SNYK_REGISTRY_PASSWORD'] = ghcr_password
+      _thread_local.snyk_username = ghcr_username
+      _thread_local.snyk_password = ghcr_password
       log_debug(f'Set GHCR credentials for image: {image_reference}')
+      _apply_thread_credentials()
     else:
       log_error(f'Cannot scan {image_reference}: GHCR credentials not configured')
   
@@ -297,9 +309,10 @@ def _set_registry_credentials_for_image(image_reference):
     ecr_username = os.getenv('ECR_USERNAME')
     ecr_password = os.getenv('ECR_PASSWORD')
     if ecr_username and ecr_password:
-      os.environ['SNYK_REGISTRY_USERNAME'] = ecr_username
-      os.environ['SNYK_REGISTRY_PASSWORD'] = ecr_password
+      _thread_local.snyk_username = ecr_username
+      _thread_local.snyk_password = ecr_password
       log_debug(f'Set ECR credentials for image: {image_reference}')
+      _apply_thread_credentials()
     else:
       log_error(f'Cannot scan {image_reference}: ECR credentials not configured')
   
@@ -308,6 +321,23 @@ def _set_registry_credentials_for_image(image_reference):
   
   else:
     log_debug(f'Unknown registry for image: {image_reference}')
+
+
+def _apply_thread_credentials():
+  """
+  Apply thread-local credentials to SNYK_REGISTRY_* environment variables.
+  This is called by _set_registry_credentials_for_image() and ensures
+  each thread has its own credential context.
+  """
+  if hasattr(_thread_local, 'snyk_username') and _thread_local.snyk_username:
+    os.environ['SNYK_REGISTRY_USERNAME'] = _thread_local.snyk_username
+  else:
+    os.environ.pop('SNYK_REGISTRY_USERNAME', None)
+  
+  if hasattr(_thread_local, 'snyk_password') and _thread_local.snyk_password:
+    os.environ['SNYK_REGISTRY_PASSWORD'] = _thread_local.snyk_password
+  else:
+    os.environ.pop('SNYK_REGISTRY_PASSWORD', None)
 
 
 def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=None):
