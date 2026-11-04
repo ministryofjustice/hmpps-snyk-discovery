@@ -101,8 +101,10 @@ def _setup_ecr_authentication_via_irsa():
   """
   Set up ECR authentication using IRSA (IAM Roles for Service Accounts).
   
-  Uses boto3 to get ECR authorization token and writes credentials to
-  ~/.docker/config.json (no docker-py needed).
+  Uses boto3 to get ECR authorization tokens for multiple regions and writes
+  credentials to ~/.docker/config.json (no docker-py needed).
+  
+  Supports images in different ECR regions (eu-west-2, us-east-1, etc).
   
   IRSA automatically provides:
   - AWS_ROLE_ARN: The ARN of the assumed IAM role
@@ -115,7 +117,6 @@ def _setup_ecr_authentication_via_irsa():
   # Check if IRSA environment variables are present
   aws_role_arn = os.getenv('AWS_ROLE_ARN', '').strip()
   aws_token_file = os.getenv('AWS_WEB_IDENTITY_TOKEN_FILE', '').strip()
-  aws_region = os.getenv('AWS_REGION', 'us-east-1').strip()
   
   if not aws_role_arn or not aws_token_file or not os.path.exists(aws_token_file):
     log_warning('IRSA is not configured - ECR images will not be accessible')
@@ -125,36 +126,23 @@ def _setup_ecr_authentication_via_irsa():
   log_info('✓ IRSA is configured')
   log_debug(f'  Role ARN: {aws_role_arn}')
   log_debug(f'  Token File: {aws_token_file}')
-  log_debug(f'  Region: {aws_region}')
   
   try:
     # Extract account ID from role ARN (arn:aws:iam::ACCOUNT_ID:role/...)
     try:
       account_id = aws_role_arn.split(':')[4]
-      ecr_endpoint = f'{account_id}.dkr.ecr.{aws_region}.amazonaws.com'
     except (IndexError, ValueError):
       log_error(f'Unable to extract account ID from role ARN: {aws_role_arn}')
       return False
     
-    # Create boto3 ECR client (uses IRSA credentials automatically)
-    ecr_client = boto3.client('ecr', region_name=aws_region)
+    # Support multiple ECR regions (images may be in different regions)
+    ecr_regions = ['us-east-1', 'eu-west-2', 'eu-west-1']
     
-    # Get ECR authorization token from AWS
-    response = ecr_client.get_authorization_token()
-    auth_data = response['authorizationData'][0]
-    
-    # Decode authorization token (base64 encoded username:password)
-    auth_token = base64.b64decode(
-      auth_data['authorizationToken']
-    ).decode('utf-8')
-    username, password = auth_token.split(':')
-    
-    # Write credentials to ~/.docker/config.json
+    # Load or create docker config
     docker_config_dir = pathlib.Path.home() / '.docker'
     docker_config_dir.mkdir(mode=0o700, exist_ok=True)
     docker_config_file = docker_config_dir / 'config.json'
     
-    # Load existing config or create new one
     if docker_config_file.exists():
       with open(docker_config_file, 'r') as f:
         config = json.load(f)
@@ -165,11 +153,38 @@ def _setup_ecr_authentication_via_irsa():
     if 'auths' not in config:
       config['auths'] = {}
     
-    # Add ECR credentials (base64 encoded username:password)
-    credentials = base64.b64encode(
-      f'{username}:{password}'.encode()
-    ).decode()
-    config['auths'][ecr_endpoint] = {'auth': credentials}
+    # Get credentials for each region
+    for region in ecr_regions:
+      try:
+        ecr_endpoint = f'{account_id}.dkr.ecr.{region}.amazonaws.com'
+        
+        # Create boto3 ECR client for this region
+        ecr_client = boto3.client('ecr', region_name=region)
+        
+        # Get ECR authorization token from AWS
+        response = ecr_client.get_authorization_token()
+        auth_data = response['authorizationData'][0]
+        
+        # Decode authorization token (base64 encoded username:password)
+        auth_token = base64.b64decode(
+          auth_data['authorizationToken']
+        ).decode('utf-8')
+        username, password = auth_token.split(':')
+        
+        # Add ECR credentials for this region
+        credentials = base64.b64encode(
+          f'{username}:{password}'.encode()
+        ).decode()
+        config['auths'][ecr_endpoint] = {'auth': credentials}
+        
+        log_debug(f'  ✓ Got credentials for {region}')
+        
+      except ClientError as e:
+        log_debug(f'  Could not get credentials for {region}: {e}')
+        continue
+      except Exception as e:
+        log_debug(f'  Unexpected error for {region}: {e}')
+        continue
     
     # Write config back to file
     with open(docker_config_file, 'w') as f:
@@ -178,16 +193,11 @@ def _setup_ecr_authentication_via_irsa():
     # Restrict permissions on config file (contains credentials)
     docker_config_file.chmod(0o600)
     
-    log_info(f'✓ ECR credentials configured ({ecr_endpoint})')
+    num_regions = len([k for k in config['auths'].keys() 
+                       if '.dkr.ecr.' in k])
+    log_info(f'✓ ECR credentials configured for {num_regions} region(s)')
     return True
     
-  except ClientError as e:
-    error_code = e.response['Error']['Code']
-    log_error(
-      f'AWS ECR API error ({error_code}): '
-      f'{e.response["Error"]["Message"]}'
-    )
-    return False
   except (IOError, OSError) as e:
     log_error(f'Failed to write Docker config: {e}')
     return False
