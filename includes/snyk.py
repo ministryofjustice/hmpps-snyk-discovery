@@ -244,7 +244,76 @@ def create_snyk_policy_file(component_name, snyk_ignore_content):
     return None
 
 
+def _detect_registry_type(image_reference):
+  """
+  Detect which registry an image belongs to based on its reference.
+  
+  Args:
+      image_reference: Full image reference (e.g., ghcr.io/org/image:tag)
+  
+  Returns:
+      str: 'ghcr', 'ecr', 'quay', or 'unknown'
+  """
+  if not image_reference:
+    return 'unknown'
+  
+  image_lower = image_reference.lower()
+  
+  if 'ghcr.io' in image_lower:
+    return 'ghcr'
+  elif '.dkr.ecr.' in image_lower and '.amazonaws.com' in image_lower:
+    return 'ecr'
+  elif 'quay.io' in image_lower:
+    return 'quay'
+  else:
+    return 'unknown'
+
+
+def _set_registry_credentials_for_image(image_reference):
+  """
+  Set SNYK_REGISTRY_USERNAME and SNYK_REGISTRY_PASSWORD based on image registry.
+  Uses credentials stored in GHCR_USERNAME, GHCR_PASSWORD, ECR_USERNAME, ECR_PASSWORD.
+  
+  Args:
+      image_reference: Image URL to scan
+  """
+  registry_type = _detect_registry_type(image_reference)
+  
+  # Always clear previous credentials to avoid cross-registry conflicts
+  os.environ.pop('SNYK_REGISTRY_USERNAME', None)
+  os.environ.pop('SNYK_REGISTRY_PASSWORD', None)
+  
+  if registry_type == 'ghcr':
+    ghcr_username = os.getenv('GHCR_USERNAME')
+    ghcr_password = os.getenv('GHCR_PASSWORD')
+    if ghcr_username and ghcr_password:
+      os.environ['SNYK_REGISTRY_USERNAME'] = ghcr_username
+      os.environ['SNYK_REGISTRY_PASSWORD'] = ghcr_password
+      log_debug(f'Set GHCR credentials for image: {image_reference}')
+    else:
+      log_error(f'Cannot scan {image_reference}: GHCR credentials not configured')
+  
+  elif registry_type == 'ecr':
+    ecr_username = os.getenv('ECR_USERNAME')
+    ecr_password = os.getenv('ECR_PASSWORD')
+    if ecr_username and ecr_password:
+      os.environ['SNYK_REGISTRY_USERNAME'] = ecr_username
+      os.environ['SNYK_REGISTRY_PASSWORD'] = ecr_password
+      log_debug(f'Set ECR credentials for image: {image_reference}')
+    else:
+      log_error(f'Cannot scan {image_reference}: ECR credentials not configured')
+  
+  elif registry_type == 'quay':
+    log_debug(f'No credentials needed for public quay.io image: {image_reference}')
+  
+  else:
+    log_debug(f'Unknown registry for image: {image_reference}')
+
+
 def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=None):
+  # Set registry credentials before scanning based on image type
+  _set_registry_credentials_for_image(image_name)
+  
   log_info(f'Running Snyk scan on {image_name}')
   command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
   if policy_file_path:

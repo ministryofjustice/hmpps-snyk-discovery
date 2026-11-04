@@ -46,9 +46,10 @@ def _normalise_service_catalogue_endpoint_for_local_testing():
 def _setup_ghcr_authentication():
   """
   Set up GHCR authentication from GHCR_AUTH_CONFIG.
+  Extract credentials and set GHCR_USERNAME and GHCR_PASSWORD environment variables.
   
   Returns:
-      bool: True if GHCR credentials were configured, False otherwise
+      bool: True if setup successful, False otherwise
   """
   raw_config = os.getenv('GHCR_AUTH_CONFIG', '').strip()
   if not raw_config:
@@ -91,26 +92,24 @@ def _setup_ghcr_authentication():
       log_warning('Unable to decode GHCR auth token; skipping GHCR setup.')
       return False
 
-  os.environ['SNYK_REGISTRY_USERNAME'] = username
-  os.environ['SNYK_REGISTRY_PASSWORD'] = password
-  log_info('✓ GHCR authentication configured from GHCR_AUTH_CONFIG')
+  # Set environment variables
+  os.environ['GHCR_USERNAME'] = username
+  os.environ['GHCR_PASSWORD'] = password
+  log_info('✓ GHCR_USERNAME and GHCR_PASSWORD set')
   return True
 
 
 def _setup_ecr_authentication_via_irsa():
   """
   Set up ECR authentication using IRSA (IAM Roles for Service Accounts).
-  
-  Uses boto3 to get ECR authorization token and writes credentials to
-  ~/.docker/config.json (no docker-py needed).
+  Extract credentials and set ECR_USERNAME and ECR_PASSWORD environment variables.
   
   IRSA automatically provides:
   - AWS_ROLE_ARN: The ARN of the assumed IAM role
   - AWS_WEB_IDENTITY_TOKEN_FILE: Path to JWT token file
   
   Returns:
-      bool: True if IRSA is configured and credentials written
-            successfully, False otherwise
+      bool: True if setup successful, False otherwise
   """
   # Check if IRSA environment variables are present
   aws_role_arn = os.getenv('AWS_ROLE_ARN', '').strip()
@@ -149,36 +148,10 @@ def _setup_ecr_authentication_via_irsa():
     ).decode('utf-8')
     username, password = auth_token.split(':')
     
-    # Write credentials to ~/.docker/config.json
-    docker_config_dir = pathlib.Path.home() / '.docker'
-    docker_config_dir.mkdir(mode=0o700, exist_ok=True)
-    docker_config_file = docker_config_dir / 'config.json'
-    
-    # Load existing config or create new one
-    if docker_config_file.exists():
-      with open(docker_config_file, 'r') as f:
-        config = json.load(f)
-    else:
-      config = {'auths': {}}
-    
-    # Ensure 'auths' section exists
-    if 'auths' not in config:
-      config['auths'] = {}
-    
-    # Add ECR credentials (base64 encoded username:password)
-    credentials = base64.b64encode(
-      f'{username}:{password}'.encode()
-    ).decode()
-    config['auths'][ecr_endpoint] = {'auth': credentials}
-    
-    # Write config back to file
-    with open(docker_config_file, 'w') as f:
-      json.dump(config, f)
-    
-    # Restrict permissions on config file (contains credentials)
-    docker_config_file.chmod(0o600)
-    
-    log_info(f'✓ ECR credentials configured ({ecr_endpoint})')
+    # Set environment variables
+    os.environ['ECR_USERNAME'] = username
+    os.environ['ECR_PASSWORD'] = password
+    log_info(f'✓ ECR_USERNAME and ECR_PASSWORD set ({ecr_endpoint})')
     return True
     
   except ClientError as e:
@@ -188,42 +161,47 @@ def _setup_ecr_authentication_via_irsa():
       f'{e.response["Error"]["Message"]}'
     )
     return False
-  except (IOError, OSError) as e:
-    log_error(f'Failed to write Docker config: {e}')
-    return False
   except Exception as e:
     log_error(f'Unexpected error during ECR authentication: {e}')
     return False
 
 
-def _print_registry_status(ghcr_available, ecr_available, quay_available=True):
+def _print_registry_status():
   """
-  Print a summary of available registries for debugging.
+  Print a summary of available registries and their credentials.
   
-  Args:
-      ghcr_available: Whether GHCR credentials are configured
-      ecr_available: Whether IRSA/ECR setup is configured
-      quay_available: Always True (public registry, no auth needed)
+  Returns:
+      bool: True if at least one registry is configured
   """
   log_info('')
   log_info('Registry Authentication Status:')
   log_info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-  quay_status = '✓ No auth required' if quay_available else '✗ Not accessible'
-  log_info(f'  quay.io (Public):      {quay_status}')
-  ghcr_status = '✓ Available' if ghcr_available else '✗ Not configured'
+  
+  ghcr_username = os.getenv('GHCR_USERNAME')
+  ghcr_password = os.getenv('GHCR_PASSWORD')
+  ecr_username = os.getenv('ECR_USERNAME')
+  ecr_password = os.getenv('ECR_PASSWORD')
+  
+  quay_status = '✓ No auth required (public)'
+  log_info(f'  quay.io:               {quay_status}')
+  
+  ghcr_status = '✓ Configured' if (ghcr_username and ghcr_password) else '✗ Not configured'
   log_info(f'  GHCR (ghcr.io):        {ghcr_status}')
-  ecr_status = '✓ Available (IRSA)' if ecr_available else '✗ Not configured'
+  
+  ecr_status = '✓ Configured (IRSA)' if (ecr_username and ecr_password) else '✗ Not configured'
   log_info(f'  ECR (*.dkr.ecr.*):     {ecr_status}')
+  
   log_info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   log_info('')
   
   # Fail only if NO registries are available
-  if not quay_available and not ghcr_available and not ecr_available:
-    log_critical('ERROR: No registries are accessible!')
-    return False
+  registries_available = (
+    (ghcr_username and ghcr_password) or
+    (ecr_username and ecr_password) or
+    True  # quay.io is always available
+  )
   
-  return True
-
+  return registries_available
 
 
 def main():
@@ -249,14 +227,15 @@ def main():
   _normalise_service_catalogue_endpoint_for_local_testing()
   
   # Step 2: Set up GHCR authentication (from GHCR_AUTH_CONFIG)
-  ghcr_available = _setup_ghcr_authentication()
+  if not _setup_ghcr_authentication():
+    log_warning('GHCR authentication setup failed')
   
   # Step 3: Set up ECR authentication (from IRSA)
-  ecr_available = _setup_ecr_authentication_via_irsa()
+  if not _setup_ecr_authentication_via_irsa():
+    log_warning('ECR authentication setup failed')
   
-  # Step 4: Print registry status (quay.io is always available as public)
-  quay_available = True  # quay.io is public, no auth needed
-  if not _print_registry_status(ghcr_available, ecr_available, quay_available):
+  # Step 4: Print registry status with credentials
+  if not _print_registry_status():
     log_critical('No registries are accessible!')
     slack.alert(
       'hmpps-snyk-discovery: No registries are accessible '
