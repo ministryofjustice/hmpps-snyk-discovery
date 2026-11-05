@@ -6,6 +6,9 @@ import os
 import sys
 from urllib.parse import urlparse
 
+import boto3
+from botocore.exceptions import ClientError
+
 from hmpps import ServiceCatalogue, Slack
 import processes.snyk_scans as snyk_scans
 import includes.snyk as snyk
@@ -39,10 +42,18 @@ def _normalise_service_catalogue_endpoint_for_local_testing():
     )
 
 
-def _set_snyk_registry_credentials_from_ghcr_auth_config():
+def _setup_ghcr_authentication():
+  """
+  Set up GHCR authentication from GHCR_AUTH_CONFIG.
+  Extract credentials and set GHCR_USERNAME and GHCR_PASSWORD environment variables.
+  
+  Returns:
+      bool: True if setup successful, False otherwise
+  """
   raw_config = os.getenv('GHCR_AUTH_CONFIG', '').strip()
   if not raw_config:
-    return
+    log_warning('GHCR_AUTH_CONFIG not found - GHCR images will not be accessible')
+    return False
 
   config_data = None
   try:
@@ -52,8 +63,8 @@ def _set_snyk_registry_credentials_from_ghcr_auth_config():
       decoded = base64.b64decode(raw_config).decode('utf-8')
       config_data = json.loads(decoded)
     except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
-      log_warning('GHCR_AUTH_CONFIG is not valid JSON; skipping registry env setup.')
-      return
+      log_warning('GHCR_AUTH_CONFIG is not valid JSON; skipping GHCR setup.')
+      return False
 
   auths = config_data.get('auths', {}) if isinstance(config_data, dict) else {}
   ghcr_auth_entry = (
@@ -62,7 +73,8 @@ def _set_snyk_registry_credentials_from_ghcr_auth_config():
     or auths.get('https://ghcr.io/v1/')
   )
   if not isinstance(ghcr_auth_entry, dict):
-    return
+    log_warning('No valid GHCR auth entry found in GHCR_AUTH_CONFIG')
+    return False
 
   username = ghcr_auth_entry.get('username')
   password = ghcr_auth_entry.get('password')
@@ -70,17 +82,131 @@ def _set_snyk_registry_credentials_from_ghcr_auth_config():
   if not username or not password:
     auth_value = ghcr_auth_entry.get('auth')
     if not auth_value:
-      return
+      log_warning('No credentials found in GHCR auth entry')
+      return False
     try:
       decoded_auth = base64.b64decode(auth_value).decode('utf-8')
       username, password = decoded_auth.split(':', 1)
     except (binascii.Error, UnicodeDecodeError, ValueError):
-      log_warning('Unable to decode GHCR auth token; skipping registry env setup.')
-      return
+      log_warning('Unable to decode GHCR auth token; skipping GHCR setup.')
+      return False
 
-  os.environ['SNYK_REGISTRY_USERNAME'] = username
-  os.environ['SNYK_REGISTRY_PASSWORD'] = password
-  log_debug('Set SNYK registry credentials from GHCR_AUTH_CONFIG.')
+  # Set environment variables
+  os.environ['GHCR_USERNAME'] = username
+  os.environ['GHCR_PASSWORD'] = password
+  log_info('✓ GHCR_USERNAME and GHCR_PASSWORD set')
+  return True
+
+
+def _setup_ecr_authentication_via_irsa():
+  """
+  Set up ECR authentication using IRSA (IAM Roles for Service Accounts).
+  Extract credentials and set ECR_USERNAME and ECR_PASSWORD environment variables.
+  
+  IRSA automatically provides:
+  - AWS_ROLE_ARN: The ARN of the assumed IAM role
+  - AWS_WEB_IDENTITY_TOKEN_FILE: Path to JWT token file
+  
+  Returns:
+      bool: True if setup successful, False otherwise
+  """
+  # Check if IRSA environment variables are present
+  aws_role_arn = os.getenv('AWS_ROLE_ARN', '').strip()
+  aws_token_file = os.getenv('AWS_WEB_IDENTITY_TOKEN_FILE', '').strip()
+  aws_region = os.getenv('AWS_REGION', 'eu-west-2').strip()
+  
+  if not aws_role_arn or not aws_token_file or not os.path.exists(aws_token_file):
+    log_warning('IRSA is not configured - ECR images will not be accessible')
+    log_info('Ensure ServiceAccount has eks.amazonaws.com/role-arn annotation')
+    return False
+  
+  log_info('✓ IRSA is configured')
+  log_debug(f'  Role ARN: {aws_role_arn}')
+  log_debug(f'  Token File: {aws_token_file}')
+  log_debug(f'  Region: {aws_region}')
+  
+  try:
+    # Extract account ID from role ARN (arn:aws:iam::ACCOUNT_ID:role/...)
+    try:
+      account_id = aws_role_arn.split(':')[4]
+      ecr_endpoint = f'{account_id}.dkr.ecr.{aws_region}.amazonaws.com'
+    except (IndexError, ValueError):
+      log_error(f'Unable to extract account ID from role ARN: {aws_role_arn}')
+      return False
+    
+    # Create boto3 ECR client (uses IRSA credentials automatically)
+    ecr_client = boto3.client('ecr', region_name=aws_region)
+    
+    # Get ECR authorization token from AWS
+    response = ecr_client.get_authorization_token()
+    auth_data = response['authorizationData'][0]
+    
+    # Decode authorization token (base64 encoded username:password)
+    auth_token = base64.b64decode(
+      auth_data['authorizationToken']
+    ).decode('utf-8')
+    username, password = auth_token.split(':')
+    
+    # Set environment variables
+    os.environ['ECR_USERNAME'] = username
+    os.environ['ECR_PASSWORD'] = password
+    log_info(f'✓ ECR_USERNAME and ECR_PASSWORD set ({ecr_endpoint})')
+    return True
+    
+  except ClientError as e:
+    error_code = e.response['Error']['Code']
+    log_error(
+      f'AWS ECR API error ({error_code}): '
+      f'{e.response["Error"]["Message"]}'
+    )
+    return False
+  except Exception as e:
+    log_error(f'Unexpected error during ECR authentication: {e}')
+    return False
+
+
+def _print_registry_status():
+  """
+  Print a summary of available registries and their credentials.
+  
+  Returns:
+      bool: True if at least one registry is configured
+  """
+  log_info('')
+  log_info('Registry Authentication Status:')
+  log_info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  
+  ghcr_username = os.getenv('GHCR_USERNAME')
+  ghcr_password = os.getenv('GHCR_PASSWORD')
+  ecr_username = os.getenv('ECR_USERNAME')
+  ecr_password = os.getenv('ECR_PASSWORD')
+  
+  quay_status = '✓ No auth required (public)'
+  log_info(f'  quay.io:               {quay_status}')
+  
+  ghcr_status = (
+    '✓ Configured' if (ghcr_username and ghcr_password)
+    else '✗ Not configured'
+  )
+  log_info(f'  GHCR (ghcr.io):        {ghcr_status}')
+  
+  ecr_status = (
+    '✓ Configured (IRSA)' if (ecr_username and ecr_password)
+    else '✗ Not configured'
+  )
+  log_info(f'  ECR (*.dkr.ecr.*):     {ecr_status}')
+  
+  log_info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+  log_info('')
+  
+  # Fail only if NO registries are available
+  registries_available = (
+    (ghcr_username and ghcr_password) or
+    (ecr_username and ecr_password) or
+    True  # quay.io is always available
+  )
+  
+  return registries_available
 
 
 def main():
@@ -101,8 +227,28 @@ def main():
     sys.exit(1)
 
   slack = Slack()
+  
+  # Step 1: Normalize Service Catalogue endpoint (local testing support)
   _normalise_service_catalogue_endpoint_for_local_testing()
-  _set_snyk_registry_credentials_from_ghcr_auth_config()
+  
+  # Step 2: Set up GHCR authentication (from GHCR_AUTH_CONFIG)
+  if not _setup_ghcr_authentication():
+    log_warning('GHCR authentication setup failed')
+  
+  # Step 3: Set up ECR authentication (from IRSA)
+  if not _setup_ecr_authentication_via_irsa():
+    log_warning('ECR authentication setup failed')
+  
+  # Step 4: Print registry status with credentials
+  if not _print_registry_status():
+    log_critical('No registries are accessible!')
+    slack.alert(
+      'hmpps-snyk-discovery: No registries are accessible '
+      '(quay.io, GHCR, ECR)'
+    )
+    sys.exit(1)
+  
+  # Step 5: Connect to Service Catalogue
   sc = ServiceCatalogue()
 
   if not sc.connection_ok:
@@ -110,7 +256,7 @@ def main():
     slack.alert('hmpps-snyk-discovery: failed to connect to the Service Catalogue')
     sys.exit(1)
 
-  # Install Snyk
+  # Step 6: Install Snyk
   log_debug('Installing snyk')
   snyk_status = snyk.install()
   if snyk_status.startswith('Failed'):
@@ -120,6 +266,7 @@ def main():
     sys.exit(1)
   log_debug('Snyk installed')
 
+  # Step 7: Get image list and perform scans
   image_list = snyk_scans.get_image_list(sc=sc)
   snyk_scans.delete_sc_snyk_scan_results(sc=sc)
   vulnerability_sync_state = snyk_scans.create_vulnerability_sync_state(sc=sc)
@@ -132,9 +279,11 @@ def main():
   snyk_scans.update_scan_cve_details(sc=sc)
   snyk_scans.delete_orphan_snyk_vulnerabilities(sc=sc)
   snyk_scans.send_summary_to_slack(sc=sc, slack=slack)
+  
+  # Step 8: Final status
   if job.error_messages:
     sc.update_scheduled_job('Errors')
-    log_info('Snyk discovery job completed  with errors.')
+    log_info('Snyk discovery job completed with errors.')
   else:
     sc.update_scheduled_job('Succeeded')
     log_info('Snyk discovery job completed successfully.')

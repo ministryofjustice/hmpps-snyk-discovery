@@ -182,11 +182,40 @@ def get_platform_fallbacks():
   ]
 
 
-def run_snyk_subprocess(command, cache_dir=None):
+def run_snyk_subprocess(
+    command,
+    cache_dir=None,
+    snyk_username=None,
+    snyk_password=None,
+):
+  """
+  Run Snyk subprocess with isolated environment variables per thread.
+  
+  Args:
+      command: Snyk command to run
+      cache_dir: Cache directory for this thread
+      snyk_username: Registry username (not set in environment if None)
+      snyk_password: Registry password (not set in environment if None)
+  
+  Returns:
+      subprocess.CompletedProcess result
+  """
   target_cache_dir = cache_dir or get_thread_cache_dir()
   os.makedirs(target_cache_dir, exist_ok=True)
   process_env = os.environ.copy()
   process_env['SNYK_CACHE_PATH'] = target_cache_dir
+  
+  # Set registry credentials only for this subprocess (isolated per thread)
+  if snyk_username:
+    process_env['SNYK_REGISTRY_USERNAME'] = snyk_username
+  else:
+    process_env.pop('SNYK_REGISTRY_USERNAME', None)
+  
+  if snyk_password:
+    process_env['SNYK_REGISTRY_PASSWORD'] = snyk_password
+  else:
+    process_env.pop('SNYK_REGISTRY_PASSWORD', None)
+  
   return subprocess.run(
     command,
     capture_output=True,
@@ -244,7 +273,82 @@ def create_snyk_policy_file(component_name, snyk_ignore_content):
     return None
 
 
+def _detect_registry_type(image_reference):
+  """
+  Detect which registry an image belongs to based on its reference.
+  
+  Args:
+      image_reference: Full image reference (e.g., ghcr.io/org/image:tag)
+  
+  Returns:
+      str: 'ghcr', 'ecr', 'quay', or 'unknown'
+  """
+  if not image_reference:
+    return 'unknown'
+  
+  image_lower = image_reference.lower()
+  
+  if 'ghcr.io' in image_lower:
+    return 'ghcr'
+  elif '.dkr.ecr.' in image_lower and '.amazonaws.com' in image_lower:
+    return 'ecr'
+  elif 'quay.io' in image_lower:
+    return 'quay'
+  else:
+    return 'unknown'
+
+
+def _get_registry_credentials(image_reference):
+  """
+  Get registry credentials for an image based on its registry type.
+  Returns credentials as (username, password) tuple.
+  Credentials are NOT set in os.environ - caller must pass to subprocess.
+  
+  Args:
+      image_reference: Image URL to scan
+  
+  Returns:
+      tuple: (username, password) or (None, None) if no credentials needed
+  """
+  registry_type = _detect_registry_type(image_reference)
+  
+  if registry_type == 'ghcr':
+    ghcr_username = os.getenv('GHCR_USERNAME')
+    ghcr_password = os.getenv('GHCR_PASSWORD')
+    if ghcr_username and ghcr_password:
+      log_debug(f'Using GHCR credentials for image: {image_reference}')
+      return ghcr_username, ghcr_password
+    else:
+      log_error(f'Cannot scan {image_reference}: GHCR credentials not configured')
+      return None, None
+  
+  elif registry_type == 'ecr':
+    ecr_username = os.getenv('ECR_USERNAME')
+    ecr_password = os.getenv('ECR_PASSWORD')
+    if ecr_username and ecr_password:
+      log_debug(f'Using ECR credentials for image: {image_reference}')
+      return ecr_username, ecr_password
+    else:
+      log_error(f'Cannot scan {image_reference}: ECR credentials not configured')
+      return None, None
+  
+  elif registry_type == 'quay':
+    log_debug(f'No credentials needed for public quay.io image: {image_reference}')
+    return None, None
+  
+  else:
+    log_debug(f'Unknown registry for image: {image_reference}')
+    return None, None
+
+
 def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=None):
+  """
+  Run Snyk scan on an image with registry-specific credentials.
+  Credentials are passed directly to subprocess, not set in os.environ.
+  """
+  # Get credentials for this image's registry (not set in os.environ)
+  snyk_username, snyk_password = _get_registry_credentials(image_name)
+  
   log_info(f'Running Snyk scan on {image_name}')
   command = [snyk_binary, 'container', 'test', image_name, '--json', '--app-vulns']
   if policy_file_path:
@@ -252,7 +356,12 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=No
     command.append(f'--policy-path={policy_file_path}')
   target_cache_dir = cache_dir or get_thread_cache_dir()
   try:
-    result = run_snyk_subprocess(command, cache_dir=target_cache_dir)
+    result = run_snyk_subprocess(
+      command,
+      cache_dir=target_cache_dir,
+      snyk_username=snyk_username,
+      snyk_password=snyk_password,
+    )
      # Snyk exits with code 1 when vulnerabilities are found, which is expected.
     if result.returncode in (0, 1):
       if not result.stdout:
@@ -278,6 +387,8 @@ def run_snyk_scan(image_name, retry_count=0, cache_dir=None, policy_file_path=No
         platform_result = run_snyk_subprocess(
           platform_command,
           cache_dir=target_cache_dir,
+          snyk_username=snyk_username,
+          snyk_password=snyk_password,
         )
         if platform_result.returncode in (0, 1):
           if not platform_result.stdout:

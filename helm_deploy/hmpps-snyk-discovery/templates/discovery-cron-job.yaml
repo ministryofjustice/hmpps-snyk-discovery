@@ -19,6 +19,7 @@ spec:
       ttlSecondsAfterFinished: 345600
       template:
         spec:
+          serviceAccountName: hmpps-snyk-discovery
           containers:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
@@ -55,6 +56,7 @@ spec:
       ttlSecondsAfterFinished: 345600
       template:
         spec:
+          serviceAccountName: hmpps-snyk-discovery
           containers:
             - name: hmpps-snyk-discovery
               image: "{{ .Values.image.repository }}:{{ .Values.version }}"
