@@ -1,10 +1,6 @@
 FROM ghcr.io/ministryofjustice/hmpps-python:python3.13-alpine AS base
 
-USER 0
-# Install aws-cli for ECR authentication
-RUN apk add --no-cache aws-cli 
 
-USER 2000
 # initialise uv
 COPY pyproject.toml .
 RUN uv sync
