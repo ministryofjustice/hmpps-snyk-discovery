@@ -1,7 +1,7 @@
 ---
 
 image:
-  repository: ghcr.io/ministryofjustice/hmpps-snyk-discovery
+  repository: ecr_repository # override at deployment time
   tag: xxx
   
 generic-prometheus-alerts:
@@ -24,5 +24,3 @@ snykScanCronJob:
       SNYK_TOKEN: "SNYK_TOKEN"
     hmpps-sre-app-slack-bot:
       SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN"
-    ghcr-pull-secret:
-      GHCR_AUTH_CONFIG: ".dockerconfigjson"
