@@ -24,3 +24,5 @@ snykScanCronJob:
       SNYK_TOKEN: "SNYK_TOKEN"
     hmpps-sre-app-slack-bot:
       SLACK_BOT_TOKEN: "SLACK_BOT_TOKEN"
+    ghcr-pull-secret:
+      GHCR_AUTH_CONFIG: ".dockerconfigjson"
